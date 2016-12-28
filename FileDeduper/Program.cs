@@ -98,74 +98,52 @@ namespace Codevoid.Utility.FileDeduper
             Queue<string> directories = new Queue<string>();
             directories.Enqueue(this._root.FullName);
 
-            DirectoryNode root = new DirectoryNode("");
-            DirectoryNode current = null;
+            List<DirectoryNode> nodes = new List<DirectoryNode>(5000000);
             ulong fileCount = 0;
 
             while (directories.Count > 0)
             {
                 var directory = directories.Dequeue();
-                current = null;
 
+                var current = new DirectoryNode(Path.GetDirectoryName(directory));
+                nodes.Add(current);
                 IEnumerable<string> childDirectories;
                 try
                 {
                     childDirectories = Directory.EnumerateDirectories(directory);
                 }
-                catch (UnauthorizedAccessException)
-                {
-                    continue;
-                }
-                catch (DirectoryNotFoundException)
-                {
-                    continue;
-                }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (DirectoryNotFoundException) { continue; }
 
                 foreach (var childDir in childDirectories)
                 {
-                    try
-                    {
-                        directories.Enqueue(childDir);
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        continue;
-                    }
-                    catch (DirectoryNotFoundException)
-                    {
-                        continue;
-                    }
+                    directories.Enqueue(childDir);
                 }
 
-                IEnumerable<string> childFiles;
-                try
-                {
-                    childFiles = Directory.EnumerateFiles(directory);
-                }
-                catch (SecurityException)
-                {
-                    continue;
-                }
-                catch (FileNotFoundException)
-                {
-                    continue;
-                }
+                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory);
 
                 foreach(var childFile in childFiles)
                 {
-                    if(current == null)
-                    {
-                        current = new DirectoryNode(Path.GetDirectoryName(directory));
-                    }
-
                     current.Files.Add(Path.GetFileName(childFile));
                     fileCount++;
                 }
 
                 this.UpdateConsole(fileCount);
+
+            }
+            Console.WriteLine();
+            Console.WriteLine("Duration: {0}", DateTime.Now - start);
+
+            ulong countedCharacters = 0;
+            foreach(var item in nodes)
+            {
+                foreach(var file in item.Files)
+                {
+                    countedCharacters += (ulong)file.Length;
+                }
             }
 
-            Console.WriteLine("Duration: {0}", DateTime.Now - start);
+            Console.WriteLine("Counted Chars: {0}", countedCharacters);
         }
 
         private void UpdateConsole(ulong count)
