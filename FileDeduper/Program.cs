@@ -8,6 +8,12 @@ using System.Threading.Tasks;
 
 namespace Codevoid.Utility.FileDeduper
 {
+    struct DirectoryToProcess
+    {
+        public string Path;
+        public DirectoryNode Parent;
+    }
+
     class DirectoryNode
     {
         private string _name;
@@ -95,32 +101,41 @@ namespace Codevoid.Utility.FileDeduper
             DateTime start = DateTime.Now;
             Console.WriteLine("Started At: {0}", start);
 
-            Queue<string> directories = new Queue<string>();
-            directories.Enqueue(this._root.FullName);
+            Queue<DirectoryToProcess> directories = new Queue<DirectoryToProcess>();
+            directories.Enqueue(new DirectoryToProcess() { Path = this._root.FullName });
 
-            List<DirectoryNode> nodes = new List<DirectoryNode>(5000000);
+            DirectoryNode root = null;
             ulong fileCount = 0;
 
             while (directories.Count > 0)
             {
                 var directory = directories.Dequeue();
 
-                var current = new DirectoryNode(Path.GetDirectoryName(directory));
-                nodes.Add(current);
+                var current = new DirectoryNode(Path.GetDirectoryName(directory.Path));
+                if(root == null)
+                {
+                    root = current;
+                }
+
+                if(directory.Parent != null)
+                {
+                    directory.Parent.Directories.Add(current);
+                }
+                
                 IEnumerable<string> childDirectories;
                 try
                 {
-                    childDirectories = Directory.EnumerateDirectories(directory);
+                    childDirectories = Directory.EnumerateDirectories(directory.Path);
                 }
                 catch (UnauthorizedAccessException) { continue; }
                 catch (DirectoryNotFoundException) { continue; }
 
                 foreach (var childDir in childDirectories)
                 {
-                    directories.Enqueue(childDir);
+                    directories.Enqueue(new DirectoryToProcess() { Path = childDir, Parent = current });
                 }
 
-                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory);
+                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
 
                 foreach(var childFile in childFiles)
                 {
@@ -135,9 +150,18 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine("Duration: {0}", DateTime.Now - start);
 
             ulong countedCharacters = 0;
-            foreach(var item in nodes)
+            Queue<DirectoryNode> foundDirectories = new Queue<DirectoryNode>();
+            foundDirectories.Enqueue(root);
+
+            while(foundDirectories.Count > 0)
             {
-                foreach(var file in item.Files)
+                var dir = foundDirectories.Dequeue();
+                foreach(var node in dir.Directories)
+                {
+                    foundDirectories.Enqueue(node);
+                }
+
+                foreach(var file in dir.Files)
                 {
                     countedCharacters += (ulong)file.Length;
                 }
