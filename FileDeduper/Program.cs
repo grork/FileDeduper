@@ -8,6 +8,38 @@ using System.Threading.Tasks;
 
 namespace Codevoid.Utility.FileDeduper
 {
+    class DirectoryNode
+    {
+        private string _name;
+        private List<string> _files;
+        private List<DirectoryNode> _directories;
+
+        internal DirectoryNode(string name)
+        {
+            this._name = name;
+            this._files = new List<string>();
+            this._directories = new List<DirectoryNode>();
+        }
+
+        public string Name
+        {
+            get
+            {
+                return this._name;
+            }
+        }
+
+        public IList<string> Files
+        {
+            get { return this._files; }
+        }
+
+        public IList<DirectoryNode> Directories
+        {
+            get { return this._directories; }
+        }
+    }
+
     class Program
     {
         static void Main(string[] args)
@@ -63,13 +95,17 @@ namespace Codevoid.Utility.FileDeduper
             DateTime start = DateTime.Now;
             Console.WriteLine("Started At: {0}", start);
 
-            Stack<string> files = new Stack<string>();
-            Stack<string> directories = new Stack<string>();
-            directories.Push(this._root.FullName);
+            Queue<string> directories = new Queue<string>();
+            directories.Enqueue(this._root.FullName);
+
+            DirectoryNode root = new DirectoryNode("");
+            DirectoryNode current = null;
+            ulong fileCount = 0;
 
             while (directories.Count > 0)
             {
-                var directory = directories.Pop();
+                var directory = directories.Dequeue();
+                current = null;
 
                 IEnumerable<string> childDirectories;
                 try
@@ -89,7 +125,7 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     try
                     {
-                        directories.Push(childDir);
+                        directories.Enqueue(childDir);
                     }
                     catch (UnauthorizedAccessException)
                     {
@@ -117,16 +153,22 @@ namespace Codevoid.Utility.FileDeduper
 
                 foreach(var childFile in childFiles)
                 {
-                    files.Push(childFile);
+                    if(current == null)
+                    {
+                        current = new DirectoryNode(Path.GetDirectoryName(directory));
+                    }
+
+                    current.Files.Add(Path.GetFileName(childFile));
+                    fileCount++;
                 }
 
-                this.UpdateConsole(files.Count);
+                this.UpdateConsole(fileCount);
             }
 
             Console.WriteLine("Duration: {0}", DateTime.Now - start);
         }
 
-        private void UpdateConsole(int count)
+        private void UpdateConsole(ulong count)
         {
             Console.SetCursorPosition(0, Console.CursorTop);
             Console.Write(count);
