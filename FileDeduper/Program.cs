@@ -14,13 +14,13 @@ namespace Codevoid.Utility.FileDeduper
     class DirectoryNode
     {
         private string _name;
-        private List<string> _files;
+        private Dictionary<string, string> _files;
         private Dictionary<string, DirectoryNode> _directories;
 
         internal DirectoryNode(string name)
         {
             this._name = name;
-            this._files = new List<string>();
+            this._files = new Dictionary<string, string>();
             this._directories = new Dictionary<string, DirectoryNode>();
         }
 
@@ -32,7 +32,7 @@ namespace Codevoid.Utility.FileDeduper
             }
         }
 
-        public IList<string> Files
+        public IDictionary<string, string> Files
         {
             get { return this._files; }
         }
@@ -55,6 +55,8 @@ namespace Codevoid.Utility.FileDeduper
                 Program.PrintUsage();
                 return;
             }
+
+            Console.CursorVisible = false;
 
             app.Begin();
         }
@@ -86,7 +88,6 @@ namespace Codevoid.Utility.FileDeduper
 
             return true;
         }
-
 
         void Begin()
         {
@@ -135,7 +136,8 @@ namespace Codevoid.Utility.FileDeduper
 
                 foreach(var childFile in childFiles)
                 {
-                    current.Files.Add(Path.GetFileName(childFile));
+                    var fileName = Path.GetFileName(childFile);
+                    current.Files[fileName] = fileName;
                     fileCount++;
                 }
 
@@ -152,20 +154,99 @@ namespace Codevoid.Utility.FileDeduper
             var discoveredFiles = state.CreateElement("DiscoveredFiles");
             rootOfState.AppendChild(discoveredFiles);
 
-            this.AddChildrenToNode(root.Directories.Values, root.Files, discoveredFiles);
+            this.AddChildrenToNode(root.Directories.Values, root.Files.Values, discoveredFiles);
 
             state.Save("State.xml");
 
-            Console.ReadLine();
+            //Console.ReadLine();
+
+            directories = new Queue<DirectoryToProcess>();
+            directories.Enqueue(new DirectoryToProcess() { Path = this._root });
+
+            while (directories.Count > 0)
+            {
+                var directory = directories.Dequeue();
+
+                if(!this.DirectoryExistsInCache(root, directory.Path, false))
+                {
+                    throw new FileNotFoundException();
+                }
+
+                IEnumerable<string> childDirectories;
+                try
+                {
+                    childDirectories = Directory.EnumerateDirectories(directory.Path);
+                }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (DirectoryNotFoundException) { continue; }
+
+                foreach (var childDir in childDirectories)
+                {
+                    directories.Enqueue(new DirectoryToProcess() { Path = childDir });
+                }
+
+                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
+
+                foreach (var childFile in childFiles)
+                {
+                    this.DirectoryExistsInCache(root, childFile, true);
+                    fileCount++;
+                }
+            }
         }
 
-        private void AddChildrenToNode(ICollection<DirectoryNode> directories, IList<string> files, XmlElement parent)
+        private bool DirectoryExistsInCache(DirectoryNode root, string path, bool isFile)
+        {
+            var workingPath = path.Remove(0, this._root.Length);
+            
+            if(String.IsNullOrEmpty(workingPath))
+            {
+                // This is the root node, by definition
+                return true;
+            }
+
+            if (workingPath[0] == '\\')
+            {
+                workingPath = workingPath.Remove(0, 1);
+            }
+
+            string fileName = null;
+            if(isFile)
+            {
+                fileName = Path.GetFileName(path);
+                workingPath = workingPath.Replace(fileName, "");
+
+                if (workingPath.EndsWith("\\"))
+                {
+                    workingPath = workingPath.TrimEnd(new char[] { '\\' });
+                }
+            }
+
+            var current = root;
+            string[] components = workingPath.Split('\\');
+            foreach(string component in components)
+            {
+                if(!current.Directories.TryGetValue(component, out current))
+                {
+                    return false;
+                }
+            }
+
+            if(isFile)
+            {
+                return current.Files.ContainsKey(fileName);
+            }
+
+            return true;
+        }
+
+        private void AddChildrenToNode(ICollection<DirectoryNode> directories, ICollection<string> files, XmlElement parent)
         {
             foreach (var dn in directories)
             {
                 var dirElement = parent.OwnerDocument.CreateElement("Folder");
 
-                this.AddChildrenToNode(dn.Directories.Values, dn.Files, dirElement);
+                this.AddChildrenToNode(dn.Directories.Values, dn.Files.Values, dirElement);
 
                 if (dirElement.ChildNodes.Count > 0)
                 {
