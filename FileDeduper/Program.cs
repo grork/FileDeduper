@@ -43,6 +43,7 @@ namespace Codevoid.Utility.FileDeduper
             // Reduce flicker when we update the processed file count
             Console.CursorVisible = false;
 
+            app.ListenForCancellation();
             app.Begin();
         }
 
@@ -50,6 +51,8 @@ namespace Codevoid.Utility.FileDeduper
         private DirectoryNode _rootNode;
         private bool _resume;
         private string _statePath = "state.xml";
+        private bool _skipFileSystemCheck;
+        private bool _wasCancelled;
 
         bool ParseArgs(string[] args)
         {
@@ -80,6 +83,9 @@ namespace Codevoid.Utility.FileDeduper
                         this._statePath = args[argIndex];
                         break;
 
+                    case "/skip":
+                        this._skipFileSystemCheck = true;
+                        break;
 
                     default:
                         break;
@@ -87,6 +93,20 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             return true;
+        }
+
+        private void ListenForCancellation()
+        {
+            Console.CancelKeyPress += this.Console_CancelKeyPress;
+        }
+
+        private void Console_CancelKeyPress(object sender, ConsoleCancelEventArgs e)
+        {
+            lock(this)
+            {
+                this._wasCancelled = true;
+                e.Cancel = true;
+            }
         }
 
         void Begin()
@@ -114,55 +134,75 @@ namespace Codevoid.Utility.FileDeduper
                 this._rootNode = new DirectoryNode(String.Empty);
             }
 
-            // Validate the state against the file system.
-            var directories = new Queue<string>();
-            directories.Enqueue(this._root);
-
             ulong addedFileCount = 0;
 
-            while (directories.Count > 0)
+            if (!this._skipFileSystemCheck)
             {
-                var directory = directories.Dequeue();
+                // Validate the state against the file system.
+                var directories = new Queue<string>();
+                directories.Enqueue(this._root);
+                bool cancelled = false;
 
-                // Scavange all the directories we need to look at
-                // and add them to the queue to be processed
-                IEnumerable<string> childDirectories;
-                try
+                while (directories.Count > 0)
                 {
-                    childDirectories = Directory.EnumerateDirectories(directory);
-                }
-                // We need to catch these since there are many
-                // folders we might not have access to or might
-                // not be enumeratable
-                catch (UnauthorizedAccessException) { continue; }
-                catch (DirectoryNotFoundException) { continue; }
+                    var directory = directories.Dequeue();
 
-                foreach (var childDir in childDirectories)
-                {
-                    directories.Enqueue(childDir);
-                }
-
-                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory);
-
-                // Check the files to see if we already have information about them
-                foreach (var childFile in childFiles)
-                {
-                    if (!this.FileExistsInLoadedState(childFile))
+                    // Scavange all the directories we need to look at
+                    // and add them to the queue to be processed
+                    IEnumerable<string> childDirectories;
+                    try
                     {
-                        // File needs to added to the tree, so process it
-                        this.AddFileToLoadedState(childFile);
-                        addedFileCount++;
+                        childDirectories = Directory.EnumerateDirectories(directory);
+                    }
+                    // We need to catch these since there are many
+                    // folders we might not have access to or might
+                    // not be enumeratable
+                    catch (UnauthorizedAccessException) { continue; }
+                    catch (DirectoryNotFoundException) { continue; }
+
+                    foreach (var childDir in childDirectories)
+                    {
+                        directories.Enqueue(childDir);
+                    }
+
+                    IEnumerable<string> childFiles = Directory.EnumerateFiles(directory);
+
+                    // Check the files to see if we already have information about them
+                    foreach (var childFile in childFiles)
+                    {
+                        if (!this.FileExistsInLoadedState(childFile))
+                        {
+                            lock(this)
+                            {
+                                if(this._wasCancelled)
+                                {
+                                    cancelled = true;
+                                    break;
+                                }
+                            }
+
+                            // File needs to added to the tree, so process it
+                            this.AddFileToLoadedState(childFile);
+                            addedFileCount++;
+                        }
+                    }
+
+                    if(cancelled)
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine("Execution cancelled: Saving state for resuming later");
+                        break;
+                    }
+
+                    if (addedFileCount > 0)
+                    {
+                        Program.UpdateConsole("New Files added: {0}", addedFileCount);
                     }
                 }
 
-                if (addedFileCount > 0)
-                {
-                    Program.UpdateConsole("New Files added: {0}", addedFileCount);
-                }
+                Console.WriteLine();
+                Console.WriteLine("State Validated in: {0}", DateTime.Now - start);
             }
-
-            Console.WriteLine();
-            Console.WriteLine("State Validated in: {0}", DateTime.Now - start);
 
             if (addedFileCount > 0)
             {
