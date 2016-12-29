@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Xml;
 
 namespace Codevoid.Utility.FileDeduper
 {
@@ -56,7 +57,6 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             app.Begin();
-            Console.ReadLine();
         }
 
         private string _root;
@@ -145,25 +145,41 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine();
             Console.WriteLine("Duration: {0}", DateTime.Now - start);
 
-            ulong countedCharacters = 0;
-            Queue<DirectoryNode> foundDirectories = new Queue<DirectoryNode>();
-            foundDirectories.Enqueue(root);
+            XmlDocument state = new XmlDocument();
+            var rootOfState = state.CreateElement("State");
+            state.AppendChild(rootOfState);
 
-            while(foundDirectories.Count > 0)
+            var discoveredFiles = state.CreateElement("DiscoveredFiles");
+            rootOfState.AppendChild(discoveredFiles);
+
+            this.AddChildrenToNode(root.Directories.Values, root.Files, discoveredFiles);
+
+            state.Save("State.xml");
+
+            Console.ReadLine();
+        }
+
+        private void AddChildrenToNode(ICollection<DirectoryNode> directories, IList<string> files, XmlElement parent)
+        {
+            foreach (var dn in directories)
             {
-                var dir = foundDirectories.Dequeue();
-                foreach(var node in dir.Directories)
-                {
-                    foundDirectories.Enqueue(node.Value);
-                }
+                var dirElement = parent.OwnerDocument.CreateElement("Folder");
 
-                foreach(var file in dir.Files)
+                this.AddChildrenToNode(dn.Directories.Values, dn.Files, dirElement);
+
+                if (dirElement.ChildNodes.Count > 0)
                 {
-                    countedCharacters += (ulong)file.Length;
+                    dirElement.SetAttribute("Name", dn.Name);
+                    parent.AppendChild(dirElement);
                 }
             }
 
-            Console.WriteLine("Counted Chars: {0}", countedCharacters);
+            foreach(var file in files)
+            {
+                var fileElement = parent.OwnerDocument.CreateElement("File");
+                fileElement.SetAttribute("Name", file);
+                parent.AppendChild(fileElement);
+            }
         }
 
         private void UpdateConsole(ulong count)
