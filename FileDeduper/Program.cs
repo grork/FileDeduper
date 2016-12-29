@@ -5,12 +5,6 @@ using System.Xml;
 
 namespace Codevoid.Utility.FileDeduper
 {
-    struct DirectoryToProcess
-    {
-        public string Path;
-        public DirectoryNode Parent;
-    }
-
     class DirectoryNode
     {
         private string _name;
@@ -25,29 +19,19 @@ namespace Codevoid.Utility.FileDeduper
         }
 
         public string Name
-        {
-            get
-            {
-                return this._name;
-            }
-        }
+        { get { return this._name; } }
 
         public IDictionary<string, string> Files
-        {
-            get { return this._files; }
-        }
+        { get { return this._files; } }
 
         public IDictionary<string, DirectoryNode> Directories
-        {
-            get { return this._directories; }
-        }
+        { get { return this._directories; } }
     }
 
     class Program
     {
         static void Main(string[] args)
         {
-            AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
             var app = new Program();
             bool parsedArgs = app.ParseArgs(args);
             if (!parsedArgs)
@@ -56,6 +40,7 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
+            // Reduce flicker when we update the processed file count
             Console.CursorVisible = false;
 
             app.Begin();
@@ -117,116 +102,150 @@ namespace Codevoid.Utility.FileDeduper
             {
                 Console.WriteLine("Loading Saved State");
                 this._rootNode = Program.LoadState(this._statePath);
+                Console.WriteLine("State Loaded In: {0}", DateTime.Now - start);
             }
-            else
+            else if (this._resume)
             {
-                if(this._resume)
-                {
-                    Console.WriteLine("State File not found, loading from FileSystem");
-                }
-
-                this._rootNode = Program.LoadStateFromFileSystem(this._root);
+                Console.WriteLine("State File not found, loading information from the file system");
             }
 
-            Console.WriteLine();
-            Console.WriteLine("Duration: {0}", DateTime.Now - start);
+            if(this._rootNode == null)
+            {
+                this._rootNode = new DirectoryNode(String.Empty);
+            }
 
             // Validate the state against the file system.
-            var directories = new Queue<DirectoryToProcess>();
-            directories.Enqueue(new DirectoryToProcess() { Path = this._root });
+            var directories = new Queue<string>();
+            directories.Enqueue(this._root);
+
+            ulong addedFileCount = 0;
 
             while (directories.Count > 0)
             {
                 var directory = directories.Dequeue();
 
+                // Scavange all the directories we need to look at
+                // and add them to the queue to be processed
                 IEnumerable<string> childDirectories;
                 try
                 {
-                    childDirectories = Directory.EnumerateDirectories(directory.Path);
+                    childDirectories = Directory.EnumerateDirectories(directory);
                 }
+                // We need to catch these since there are many
+                // folders we might not have access to or might
+                // not be enumeratable
                 catch (UnauthorizedAccessException) { continue; }
                 catch (DirectoryNotFoundException) { continue; }
 
                 foreach (var childDir in childDirectories)
                 {
-                    directories.Enqueue(new DirectoryToProcess() { Path = childDir });
+                    directories.Enqueue(childDir);
                 }
 
-                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
+                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory);
 
+                // Check the files to see if we already have information about them
                 foreach (var childFile in childFiles)
                 {
                     if (!this.FileExistsInLoadedState(childFile))
                     {
-                        throw new FileNotFoundException();
+                        // File needs to added to the tree, so process it
+                        this.AddFileToLoadedState(childFile);
+                        addedFileCount++;
                     }
                 }
+
+                if (addedFileCount > 0)
+                {
+                    Program.UpdateConsole("New Files added: {0}", addedFileCount);
+                }
             }
 
-            // Write the loaded data to disk
-            XmlDocument state = new XmlDocument();
-            var rootOfState = state.CreateElement("State");
-            state.AppendChild(rootOfState);
+            Console.WriteLine();
+            Console.WriteLine("State Validated in: {0}", DateTime.Now - start);
 
-            Program.AddChildrenToNode(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
+            if (addedFileCount > 0)
+            {
+                // Write the loaded data to disk
+                XmlDocument state = new XmlDocument();
+                var rootOfState = state.CreateElement("State");
+                state.AppendChild(rootOfState);
 
-            state.Save(this._statePath);
+                Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
+
+                state.Save(this._statePath);
+            }
         }
 
-        private static DirectoryNode LoadStateFromFileSystem(string rootPath)
+        private void AddFileToLoadedState(string path)
         {
-            DirectoryNode root = null;
-            // Populate from the File System
-            Queue<DirectoryToProcess> directories = new Queue<DirectoryToProcess>();
-            directories.Enqueue(new DirectoryToProcess() { Path = rootPath });
+            var workingPath = path.Remove(0, this._root.Length);
 
-            ulong fileCount = 0;
-
-            while (directories.Count > 0)
+            if (String.IsNullOrEmpty(workingPath))
             {
-                var directory = directories.Dequeue();
-
-                var current = new DirectoryNode(Path.GetFileName(directory.Path));
-                if (root == null)
-                {
-                    root = current;
-                }
-
-                if (directory.Parent != null)
-                {
-                    directory.Parent.Directories[current.Name] = current;
-                }
-
-                IEnumerable<string> childDirectories;
-                try
-                {
-                    childDirectories = Directory.EnumerateDirectories(directory.Path);
-                }
-                catch (UnauthorizedAccessException) { continue; }
-                catch (DirectoryNotFoundException) { continue; }
-
-                foreach (var childDir in childDirectories)
-                {
-                    directories.Enqueue(new DirectoryToProcess() { Path = childDir, Parent = current });
-                }
-
-                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
-
-                foreach (var childFile in childFiles)
-                {
-                    var fileName = Path.GetFileName(childFile);
-                    current.Files[fileName] = fileName;
-                    fileCount++;
-                }
-
-                Program.UpdateConsole(fileCount);
+                // This can happen for the root path
+                return;
             }
 
-            return root;
+            // Remove any leading \'s from the working path
+            if (workingPath[0] == '\\')
+            {
+                workingPath = workingPath.Remove(0, 1);
+            }
+
+            string fileName = null;
+            // This will include the extension, if there is one
+            fileName = Path.GetFileName(path);
+
+            // This is a file, so we need to strip out the filename
+            // from the path we're looking up to ensure that we find
+            // the right parent directory            
+            workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
+
+            // Trailing \'s will stop us from finding the path correctly
+            if (workingPath.EndsWith("\\"))
+            {
+                workingPath = workingPath.TrimEnd(new char[] { '\\' });
+            }
+
+            // Start our search at the root
+            var current = this._rootNode;
+
+            // Break out the path into the individual folder parts
+            string[] components = workingPath.Split('\\');
+            foreach (string component in components)
+            {
+                if (String.IsNullOrEmpty(component))
+                {
+                    continue;
+                }
+
+                DirectoryNode directory = null;
+                
+                // If any part of the path isn't found in the
+                // dictionaries, we need to fill in the missing parts
+                if (!current.Directories.TryGetValue(component, out directory))
+                {
+                    directory = new DirectoryNode(component);
+                    current.Directories[component] = directory;
+                }
+
+                current = directory;
+            }
+
+            // Since we're looking a file, we can assume that the
+            // dictionary looking up will give us the conclusive
+            // answer (since we found the folder path already)
+            current.Files[fileName] = fileName;
         }
 
         private bool FileExistsInLoadedState(string path)
         {
+            if (this._rootNode == null)
+            {
+                return false;
+            }
+
             var workingPath = path.Remove(0, this._root.Length);
 
             if (String.IsNullOrEmpty(workingPath))
@@ -241,15 +260,13 @@ namespace Codevoid.Utility.FileDeduper
                 workingPath = workingPath.Remove(0, 1);
             }
 
-            // If this is a file, we need to strip out the filename
-            // from the path we're looking up to ensure that we find
-            // the right parent directory            
             string fileName = null;
             // This will include the extension, if there is one
             fileName = Path.GetFileName(path);
 
-            // Remove the file name from the working path (E.g.
-            // leaving only the directory)
+            // This is a file, so we need to strip out the filename
+            // from the path we're looking up to ensure that we find
+            // the right parent directory            
             workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
 
             // Trailing \'s will stop us from finding the path correctly
@@ -268,7 +285,7 @@ namespace Codevoid.Utility.FileDeduper
                 }
 
                 // If any part of the path isn't found in the
-                // dictionaries, then it's not doing to be there (and
+                // dictionaries, then it's not going to be there (and
                 // by definition, nor will any files)
                 if (!current.Directories.TryGetValue(component, out current))
                 {
@@ -283,14 +300,17 @@ namespace Codevoid.Utility.FileDeduper
         }
 
         #region State Saving
-        private static void AddChildrenToNode(ICollection<DirectoryNode> directories, ICollection<string> files, XmlElement parent)
+        private static void AddFilesIntoSavedState(ICollection<DirectoryNode> directories, ICollection<string> files, XmlElement parent)
         {
             foreach (var dn in directories)
             {
                 var dirElement = parent.OwnerDocument.CreateElement("Folder");
 
-                Program.AddChildrenToNode(dn.Directories.Values, dn.Files.Values, dirElement);
+                Program.AddFilesIntoSavedState(dn.Directories.Values, dn.Files.Values, dirElement);
 
+                // If we have a directory with no children
+                // then there is no point in persisting this into
+                // our state state
                 if (dirElement.ChildNodes.Count == 0)
                 {
                     continue;
@@ -347,10 +367,10 @@ namespace Codevoid.Utility.FileDeduper
         #endregion State Loading
 
         #region Utility
-        private static void UpdateConsole(ulong count)
+        private static void UpdateConsole(string message, ulong count)
         {
             Console.SetCursorPosition(0, Console.CursorTop);
-            Console.Write(count);
+            Console.Write(message, count);
         }
 
         private static void PrintUsage()
