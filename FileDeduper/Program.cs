@@ -62,6 +62,9 @@ namespace Codevoid.Utility.FileDeduper
         }
 
         private string _root;
+        private DirectoryNode _rootNode;
+        private bool _resume;
+        private string _statePath = "state.xml";
 
         bool ParseArgs(string[] args)
         {
@@ -81,6 +84,18 @@ namespace Codevoid.Utility.FileDeduper
                         this._root = @"\\?\" + args[argIndex];
                         break;
 
+                    case "/res":
+                    case "/resume":
+                        this._resume = true;
+                        break;
+
+                    case "/sf":
+                    case "/state":
+                        argIndex++;
+                        this._statePath = args[argIndex];
+                        break;
+
+
                     default:
                         break;
                 }
@@ -98,10 +113,73 @@ namespace Codevoid.Utility.FileDeduper
             DateTime start = DateTime.Now;
             Console.WriteLine("Started At: {0}", start);
 
-            Queue<DirectoryToProcess> directories = new Queue<DirectoryToProcess>();
+            if (this._resume && File.Exists(this._statePath))
+            {
+                Console.WriteLine("Loading Saved State");
+                this._rootNode = Program.LoadState(this._statePath);
+            }
+            else
+            {
+                if(this._resume)
+                {
+                    Console.WriteLine("State File not found, loading from FileSystem");
+                }
+
+                this._rootNode = Program.LoadStateFromFileSystem(this._root);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("Duration: {0}", DateTime.Now - start);
+
+            // Validate the state against the file system.
+            var directories = new Queue<DirectoryToProcess>();
             directories.Enqueue(new DirectoryToProcess() { Path = this._root });
 
+            while (directories.Count > 0)
+            {
+                var directory = directories.Dequeue();
+
+                IEnumerable<string> childDirectories;
+                try
+                {
+                    childDirectories = Directory.EnumerateDirectories(directory.Path);
+                }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (DirectoryNotFoundException) { continue; }
+
+                foreach (var childDir in childDirectories)
+                {
+                    directories.Enqueue(new DirectoryToProcess() { Path = childDir });
+                }
+
+                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
+
+                foreach (var childFile in childFiles)
+                {
+                    if (!this.FileExistsInLoadedState(childFile))
+                    {
+                        throw new FileNotFoundException();
+                    }
+                }
+            }
+
+            // Write the loaded data to disk
+            XmlDocument state = new XmlDocument();
+            var rootOfState = state.CreateElement("State");
+            state.AppendChild(rootOfState);
+
+            Program.AddChildrenToNode(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
+
+            state.Save(this._statePath);
+        }
+
+        private static DirectoryNode LoadStateFromFileSystem(string rootPath)
+        {
             DirectoryNode root = null;
+            // Populate from the File System
+            Queue<DirectoryToProcess> directories = new Queue<DirectoryToProcess>();
+            directories.Enqueue(new DirectoryToProcess() { Path = rootPath });
+
             ulong fileCount = 0;
 
             while (directories.Count > 0)
@@ -141,134 +219,111 @@ namespace Codevoid.Utility.FileDeduper
                     fileCount++;
                 }
 
-                this.UpdateConsole(fileCount);
+                Program.UpdateConsole(fileCount);
             }
 
-            Console.WriteLine();
-            Console.WriteLine("Duration: {0}", DateTime.Now - start);
-
-            XmlDocument state = new XmlDocument();
-            var rootOfState = state.CreateElement("State");
-            state.AppendChild(rootOfState);
-
-            this.AddChildrenToNode(root.Directories.Values, root.Files.Values, rootOfState);
-
-            state.Save("State.xml");
-
-            Console.ReadLine();
-
-            directories = new Queue<DirectoryToProcess>();
-            directories.Enqueue(new DirectoryToProcess() { Path = this._root });
-
-            while (directories.Count > 0)
-            {
-                var directory = directories.Dequeue();
-
-                if(!this.DirectoryExistsInCache(root, directory.Path, false))
-                {
-                    throw new FileNotFoundException();
-                }
-
-                IEnumerable<string> childDirectories;
-                try
-                {
-                    childDirectories = Directory.EnumerateDirectories(directory.Path);
-                }
-                catch (UnauthorizedAccessException) { continue; }
-                catch (DirectoryNotFoundException) { continue; }
-
-                foreach (var childDir in childDirectories)
-                {
-                    directories.Enqueue(new DirectoryToProcess() { Path = childDir });
-                }
-
-                IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
-
-                foreach (var childFile in childFiles)
-                {
-                    this.DirectoryExistsInCache(root, childFile, true);
-                }
-            }
+            return root;
         }
 
-        private bool DirectoryExistsInCache(DirectoryNode root, string path, bool isFile)
+        private bool FileExistsInLoadedState(string path)
         {
             var workingPath = path.Remove(0, this._root.Length);
-            
-            if(String.IsNullOrEmpty(workingPath))
+
+            if (String.IsNullOrEmpty(workingPath))
             {
                 // This is the root node, by definition
                 return true;
             }
 
+            // Remove any leading \'s from the working path
             if (workingPath[0] == '\\')
             {
                 workingPath = workingPath.Remove(0, 1);
             }
 
+            // If this is a file, we need to strip out the filename
+            // from the path we're looking up to ensure that we find
+            // the right parent directory            
             string fileName = null;
-            if(isFile)
-            {
-                fileName = Path.GetFileName(path);
-                workingPath = workingPath.Replace(fileName, "");
+            // This will include the extension, if there is one
+            fileName = Path.GetFileName(path);
 
-                if (workingPath.EndsWith("\\"))
-                {
-                    workingPath = workingPath.TrimEnd(new char[] { '\\' });
-                }
+            // Remove the file name from the working path (E.g.
+            // leaving only the directory)
+            workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
+
+            // Trailing \'s will stop us from finding the path correctly
+            if (workingPath.EndsWith("\\"))
+            {
+                workingPath = workingPath.TrimEnd(new char[] { '\\' });
             }
 
-            var current = root;
+            var current = this._rootNode;
             string[] components = workingPath.Split('\\');
-            foreach(string component in components)
+            foreach (string component in components)
             {
-                if(!current.Directories.TryGetValue(component, out current))
+                if (String.IsNullOrEmpty(component))
+                {
+                    continue;
+                }
+
+                // If any part of the path isn't found in the
+                // dictionaries, then it's not doing to be there (and
+                // by definition, nor will any files)
+                if (!current.Directories.TryGetValue(component, out current))
                 {
                     return false;
                 }
             }
 
-            if(isFile)
-            {
-                return current.Files.ContainsKey(fileName);
-            }
-
-            return true;
+            // Since we're looking a file, we can assume that the
+            // dictionary looking up will give us the conclusive
+            // answer (since we found the folder path already)
+            return current.Files.ContainsKey(fileName);
         }
 
-        private void AddChildrenToNode(ICollection<DirectoryNode> directories, ICollection<string> files, XmlElement parent)
+        #region State Saving
+        private static void AddChildrenToNode(ICollection<DirectoryNode> directories, ICollection<string> files, XmlElement parent)
         {
             foreach (var dn in directories)
             {
                 var dirElement = parent.OwnerDocument.CreateElement("Folder");
 
-                this.AddChildrenToNode(dn.Directories.Values, dn.Files.Values, dirElement);
+                Program.AddChildrenToNode(dn.Directories.Values, dn.Files.Values, dirElement);
+
+                if (dirElement.ChildNodes.Count == 0)
+                {
+                    continue;
+                }
+
                 dirElement.SetAttribute("Name", dn.Name);
                 parent.AppendChild(dirElement);
             }
 
-            foreach(var file in files)
+            foreach (var file in files)
             {
                 var fileElement = parent.OwnerDocument.CreateElement("File");
                 fileElement.SetAttribute("Name", file);
                 parent.AppendChild(fileElement);
             }
         }
+        #endregion State Saving
 
-        private DirectoryNode LoadState()
+        #region State Loading
+        private static DirectoryNode LoadState(string path)
         {
             XmlDocument state = new XmlDocument();
-            state.Load("State.xml");
+            state.Load(path);
 
             XmlElement rootOfState = state.DocumentElement as XmlElement;
 
             DirectoryNode root = new DirectoryNode("");
-            this.ProcessNodes(root, rootOfState.ChildNodes);
+            Program.ProcessNodes(root, rootOfState.ChildNodes);
 
             return root;
         }
 
-        private void ProcessNodes(DirectoryNode parent, XmlNodeList children)
+        private static void ProcessNodes(DirectoryNode parent, XmlNodeList children)
         {
             foreach (XmlNode n in children)
             {
@@ -278,7 +333,7 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     case "Folder":
                         var newFolder = new DirectoryNode(item.GetAttribute("Name"));
-                        this.ProcessNodes(newFolder, item.ChildNodes);
+                        Program.ProcessNodes(newFolder, item.ChildNodes);
                         parent.Directories[newFolder.Name] = newFolder;
                         break;
 
@@ -289,8 +344,10 @@ namespace Codevoid.Utility.FileDeduper
                 }
             }
         }
+        #endregion State Loading
 
-        private void UpdateConsole(ulong count)
+        #region Utility
+        private static void UpdateConsole(ulong count)
         {
             Console.SetCursorPosition(0, Console.CursorTop);
             Console.Write(count);
@@ -310,5 +367,6 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine("Copyright 2016, Dominic Hopton");
             Console.WriteLine();
         }
+        #endregion Utility
     }
 }
