@@ -1,10 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Security;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Codevoid.Utility.FileDeduper
 {
@@ -18,13 +14,13 @@ namespace Codevoid.Utility.FileDeduper
     {
         private string _name;
         private List<string> _files;
-        private List<DirectoryNode> _directories;
+        private Dictionary<string, DirectoryNode> _directories;
 
         internal DirectoryNode(string name)
         {
             this._name = name;
             this._files = new List<string>();
-            this._directories = new List<DirectoryNode>();
+            this._directories = new Dictionary<string, DirectoryNode>();
         }
 
         public string Name
@@ -40,7 +36,7 @@ namespace Codevoid.Utility.FileDeduper
             get { return this._files; }
         }
 
-        public IList<DirectoryNode> Directories
+        public IDictionary<string, DirectoryNode> Directories
         {
             get { return this._directories; }
         }
@@ -63,7 +59,7 @@ namespace Codevoid.Utility.FileDeduper
             Console.ReadLine();
         }
 
-        private DirectoryInfo _root;
+        private string _root;
 
         bool ParseArgs(string[] args)
         {
@@ -80,7 +76,7 @@ namespace Codevoid.Utility.FileDeduper
                     case "/r":
                     case "/root":
                         argIndex++;
-                        this._root = new DirectoryInfo(@"\\?\" + args[argIndex]);
+                        this._root = @"\\?\" + args[argIndex];
                         break;
 
                     default:
@@ -96,13 +92,13 @@ namespace Codevoid.Utility.FileDeduper
         {
             Program.PrintHeader();
 
-            Console.WriteLine("Root: {0}", this._root.FullName);
+            Console.WriteLine("Root: {0}", this._root);
 
             DateTime start = DateTime.Now;
             Console.WriteLine("Started At: {0}", start);
 
             Queue<DirectoryToProcess> directories = new Queue<DirectoryToProcess>();
-            directories.Enqueue(new DirectoryToProcess() { Path = this._root.FullName });
+            directories.Enqueue(new DirectoryToProcess() { Path = this._root });
 
             DirectoryNode root = null;
             ulong fileCount = 0;
@@ -111,7 +107,7 @@ namespace Codevoid.Utility.FileDeduper
             {
                 var directory = directories.Dequeue();
 
-                var current = new DirectoryNode(Path.GetDirectoryName(directory.Path));
+                var current = new DirectoryNode(Path.GetFileName(directory.Path));
                 if(root == null)
                 {
                     root = current;
@@ -119,7 +115,7 @@ namespace Codevoid.Utility.FileDeduper
 
                 if(directory.Parent != null)
                 {
-                    directory.Parent.Directories.Add(current);
+                    directory.Parent.Directories[current.Name] = current;
                 }
                 
                 IEnumerable<string> childDirectories;
@@ -144,8 +140,8 @@ namespace Codevoid.Utility.FileDeduper
                 }
 
                 this.UpdateConsole(fileCount);
-
             }
+
             Console.WriteLine();
             Console.WriteLine("Duration: {0}", DateTime.Now - start);
 
@@ -158,7 +154,7 @@ namespace Codevoid.Utility.FileDeduper
                 var dir = foundDirectories.Dequeue();
                 foreach(var node in dir.Directories)
                 {
-                    foundDirectories.Enqueue(node);
+                    foundDirectories.Enqueue(node.Value);
                 }
 
                 foreach(var file in dir.Files)
