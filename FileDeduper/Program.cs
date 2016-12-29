@@ -109,16 +109,16 @@ namespace Codevoid.Utility.FileDeduper
                 var directory = directories.Dequeue();
 
                 var current = new DirectoryNode(Path.GetFileName(directory.Path));
-                if(root == null)
+                if (root == null)
                 {
                     root = current;
                 }
 
-                if(directory.Parent != null)
+                if (directory.Parent != null)
                 {
                     directory.Parent.Directories[current.Name] = current;
                 }
-                
+
                 IEnumerable<string> childDirectories;
                 try
                 {
@@ -134,7 +134,7 @@ namespace Codevoid.Utility.FileDeduper
 
                 IEnumerable<string> childFiles = Directory.EnumerateFiles(directory.Path);
 
-                foreach(var childFile in childFiles)
+                foreach (var childFile in childFiles)
                 {
                     var fileName = Path.GetFileName(childFile);
                     current.Files[fileName] = fileName;
@@ -151,14 +151,11 @@ namespace Codevoid.Utility.FileDeduper
             var rootOfState = state.CreateElement("State");
             state.AppendChild(rootOfState);
 
-            var discoveredFiles = state.CreateElement("DiscoveredFiles");
-            rootOfState.AppendChild(discoveredFiles);
-
-            this.AddChildrenToNode(root.Directories.Values, root.Files.Values, discoveredFiles);
+            this.AddChildrenToNode(root.Directories.Values, root.Files.Values, rootOfState);
 
             state.Save("State.xml");
 
-            //Console.ReadLine();
+            Console.ReadLine();
 
             directories = new Queue<DirectoryToProcess>();
             directories.Enqueue(new DirectoryToProcess() { Path = this._root });
@@ -190,7 +187,6 @@ namespace Codevoid.Utility.FileDeduper
                 foreach (var childFile in childFiles)
                 {
                     this.DirectoryExistsInCache(root, childFile, true);
-                    fileCount++;
                 }
             }
         }
@@ -247,12 +243,8 @@ namespace Codevoid.Utility.FileDeduper
                 var dirElement = parent.OwnerDocument.CreateElement("Folder");
 
                 this.AddChildrenToNode(dn.Directories.Values, dn.Files.Values, dirElement);
-
-                if (dirElement.ChildNodes.Count > 0)
-                {
-                    dirElement.SetAttribute("Name", dn.Name);
-                    parent.AppendChild(dirElement);
-                }
+                dirElement.SetAttribute("Name", dn.Name);
+                parent.AppendChild(dirElement);
             }
 
             foreach(var file in files)
@@ -260,6 +252,41 @@ namespace Codevoid.Utility.FileDeduper
                 var fileElement = parent.OwnerDocument.CreateElement("File");
                 fileElement.SetAttribute("Name", file);
                 parent.AppendChild(fileElement);
+            }
+        }
+
+        private DirectoryNode LoadState()
+        {
+            XmlDocument state = new XmlDocument();
+            state.Load("State.xml");
+
+            XmlElement rootOfState = state.DocumentElement as XmlElement;
+
+            DirectoryNode root = new DirectoryNode("");
+            this.ProcessNodes(root, rootOfState.ChildNodes);
+
+            return root;
+        }
+
+        private void ProcessNodes(DirectoryNode parent, XmlNodeList children)
+        {
+            foreach (XmlNode n in children)
+            {
+                XmlElement item = n as XmlElement;
+
+                switch (item.Name)
+                {
+                    case "Folder":
+                        var newFolder = new DirectoryNode(item.GetAttribute("Name"));
+                        this.ProcessNodes(newFolder, item.ChildNodes);
+                        parent.Directories[newFolder.Name] = newFolder;
+                        break;
+
+                    case "File":
+                        var fileName = item.GetAttribute("Name");
+                        parent.Files[fileName] = fileName;
+                        break;
+                }
             }
         }
 
