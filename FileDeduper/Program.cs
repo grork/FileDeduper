@@ -156,6 +156,7 @@ namespace Codevoid.Utility.FileDeduper
         }
 
         private string _root;
+        private string _duplicateDestinationRoot;
         private DirectoryNode _rootNode;
         private bool _resume;
         private string _statePath = "state.xml";
@@ -188,7 +189,7 @@ namespace Codevoid.Utility.FileDeduper
                         this._resume = true;
                         break;
 
-                    case "/sf":
+                    case "/st":
                     case "/state":
                         argIndex++;
                         this._statePath = args[argIndex];
@@ -197,6 +198,13 @@ namespace Codevoid.Utility.FileDeduper
                     case "/skip":
                         this._skipFileSystemCheck = true;
                         break;
+
+                    case "/d":
+                    case "/destinationroot":
+                        argIndex++;
+                        this._duplicateDestinationRoot = args[argIndex];
+                        break;
+
 
                     default:
                         break;
@@ -247,7 +255,8 @@ namespace Codevoid.Utility.FileDeduper
 
             ulong addedFileCount = 0;
             bool cancelled = false;
-
+            
+            // Discover files from the file system
             if (!this._skipFileSystemCheck)
             {
                 // Validate the state against the file system.
@@ -347,18 +356,29 @@ namespace Codevoid.Utility.FileDeduper
             {
                 var fileToHash = this._itemsRequiringHashing.Dequeue();
 
-                cancelled = this.HashFileAndUpdateState(fileToHash);
-                if (cancelled)
-                {
-                    break;
-                }
+                this.HashFileAndUpdateState(fileToHash);
 
                 filesHashed++;
+
+                lock(this)
+                {
+                    if(this._wasCancelled)
+                    {
+                        Console.WriteLine();
+                        cancelled = true;
+                        break;
+                    }
+                }
             }
 
             if(filesHashed > 0)
             {
                 this.SaveCurrentStateToDisk();
+            }
+
+            if(cancelled)
+            {
+                return;
             }
 
             Console.WriteLine();
@@ -383,7 +403,7 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine("Duplicate Files Found: {0}", filesWithDuplicates);
         }
 
-        private bool HashFileAndUpdateState(FileNode fileToHash)
+        private void HashFileAndUpdateState(FileNode fileToHash)
         {
             string filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
             Program.UpdateConsole("Hashing File: {0}", filePath);
@@ -392,8 +412,6 @@ namespace Codevoid.Utility.FileDeduper
             fileToHash.Hash = this._hasher.ComputeHash(fileStream);
 
             this.AddFileToHashOrQueueForHashing(fileToHash);
-
-            return false;
         }
 
         private void SaveCurrentStateToDisk()
@@ -663,7 +681,12 @@ namespace Codevoid.Utility.FileDeduper
             Program.PrintHeader();
 
             Console.WriteLine("Arguments:");
-            Console.WriteLine("/root: The root path where to start this search from.");
+            Console.WriteLine("/r[oot]:   The root path where to start this search from.");
+            Console.WriteLine("/res[ume]: Loads the state file, and continues from where it was. This will check the file system for new files");
+            Console.WriteLine("/sf[ate]:  File path for state to be saved. If not specified, saves 'State.xml' in the working directory");
+            Console.WriteLine("/skip:     Skips checking the file system and only uses the saved state to determine work");
+            Console.WriteLine("/d[estinationroot]: Full path to a directory root to exclude");
+
         }
 
         private static void PrintHeader()
