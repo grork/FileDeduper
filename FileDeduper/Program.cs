@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Xml;
 
 namespace Codevoid.Utility.FileDeduper
@@ -85,6 +86,56 @@ namespace Codevoid.Utility.FileDeduper
         }
     }
 
+    // Unabashedly lifted from StackOverflow:
+    // http://stackoverflow.com/questions/7244699/gethashcode-on-byte-array/7244729#7244729
+    public sealed class ArrayEqualityComparer<T> : IEqualityComparer<T[]>
+    {
+        // You could make this a per-instance field with a constructor parameter
+        private static readonly EqualityComparer<T> s_elementComparer
+            = EqualityComparer<T>.Default;
+
+        public bool Equals(T[] first, T[] second)
+        {
+            if (first == second)
+            {
+                return true;
+            }
+            if (first == null || second == null)
+            {
+                return false;
+            }
+            if (first.Length != second.Length)
+            {
+                return false;
+            }
+            for (int i = 0; i < first.Length; i++)
+            {
+                if (!s_elementComparer.Equals(first[i], second[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public int GetHashCode(T[] array)
+        {
+            unchecked
+            {
+                if (array == null)
+                {
+                    return 0;
+                }
+                int hash = 17;
+                foreach (T element in array)
+                {
+                    hash = hash * 31 + s_elementComparer.GetHashCode(element);
+                }
+                return hash;
+            }
+        }
+    }
+
     class Program
     {
         static void Main(string[] args)
@@ -111,6 +162,8 @@ namespace Codevoid.Utility.FileDeduper
         private bool _skipFileSystemCheck;
         private bool _wasCancelled;
         private Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
+        private IDictionary<byte[], IList<FileNode>> _hashToDuplicates = new Dictionary<byte[], IList<FileNode>>(new ArrayEqualityComparer<byte>());
+        private HashAlgorithm _hasher;
 
         bool ParseArgs(string[] args)
         {
@@ -179,7 +232,7 @@ namespace Codevoid.Utility.FileDeduper
             if (this._resume && File.Exists(this._statePath))
             {
                 Console.WriteLine("Loading Saved State");
-                this._rootNode = Program.LoadState(this._statePath);
+                this.LoadState(this._statePath);
                 Console.WriteLine("State Loaded In: {0}", DateTime.Now - start);
             }
             else if (this._resume)
@@ -193,13 +246,13 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             ulong addedFileCount = 0;
+            bool cancelled = false;
 
             if (!this._skipFileSystemCheck)
             {
                 // Validate the state against the file system.
                 var directories = new Queue<string>();
                 directories.Enqueue(this._root);
-                bool cancelled = false;
 
                 while (directories.Count > 0)
                 {
@@ -254,7 +307,7 @@ namespace Codevoid.Utility.FileDeduper
 
                     if (addedFileCount > 0)
                     {
-                        Program.UpdateConsole("New Files added: {0}", addedFileCount);
+                        Program.UpdateConsole("New Files added: {0}", addedFileCount.ToString());
                     }
                 }
 
@@ -264,16 +317,96 @@ namespace Codevoid.Utility.FileDeduper
 
             if (addedFileCount > 0)
             {
-                // Write the loaded data to disk
-                XmlDocument state = new XmlDocument();
-                var rootOfState = state.CreateElement("State");
-                rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
-                state.AppendChild(rootOfState);
-
-                Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
-
-                state.Save(this._statePath);
+                this.SaveCurrentStateToDisk();
             }
+
+            // If we were cancelled, lets not continue on to process
+            // the file hashes 'cause the customer is implying we
+            // should give up
+            if(cancelled)
+            {
+                return;
+            }
+
+            ulong filesHashed = 0;
+            if(this._itemsRequiringHashing.Count < 1)
+            {
+                Console.WriteLine("No files needed hashing");
+                return;
+            }
+
+            DateTime hashingStart = DateTime.Now;
+            Console.WriteLine("Hashing {0} File(s). Starting at: {1}", this._itemsRequiringHashing.Count, hashingStart);
+
+            this._hasher = new MD5CryptoServiceProvider();
+
+            // Any items that reuqired hashing have been added to the queue
+            // or been placed in the duplicate list, so lets hash the ones
+            // that require work
+            while(this._itemsRequiringHashing.Count > 0)
+            {
+                var fileToHash = this._itemsRequiringHashing.Dequeue();
+
+                cancelled = this.HashFileAndUpdateState(fileToHash);
+                if (cancelled)
+                {
+                    break;
+                }
+
+                filesHashed++;
+            }
+
+            if(filesHashed > 0)
+            {
+                this.SaveCurrentStateToDisk();
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("Hashing {0} file(s) took {1}", filesHashed, DateTime.Now - start);
+
+            ulong filesWithDuplicates = 0;
+            // Calculate Duplicate Statistics
+            foreach (var kvp in this._hashToDuplicates)
+            {
+                if(kvp.Value.Count > 1)
+                {
+                    filesWithDuplicates++;
+                }
+            }
+
+            if (filesWithDuplicates == 0)
+            {
+                Console.WriteLine("No duplicate files found");
+                return;
+            }
+
+            Console.WriteLine("Duplicate Files Found: {0}", filesWithDuplicates);
+        }
+
+        private bool HashFileAndUpdateState(FileNode fileToHash)
+        {
+            string filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
+            Program.UpdateConsole("Hashing File: {0}", filePath);
+
+            var fileStream = File.OpenRead(filePath);
+            fileToHash.Hash = this._hasher.ComputeHash(fileStream);
+
+            this.AddFileToHashOrQueueForHashing(fileToHash);
+
+            return false;
+        }
+
+        private void SaveCurrentStateToDisk()
+        {
+            // Write the loaded data to disk
+            XmlDocument state = new XmlDocument();
+            var rootOfState = state.CreateElement("State");
+            rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
+            state.AppendChild(rootOfState);
+
+            Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
+
+            state.Save(this._statePath);
         }
 
         private void AddFileToLoadedState(string path)
@@ -335,7 +468,9 @@ namespace Codevoid.Utility.FileDeduper
             // Since we're looking a file, we can assume that the
             // dictionary looking up will give us the conclusive
             // answer (since we found the folder path already)
-            current.Files[fileName] = new FileNode(fileName, current);
+            var newFile = new FileNode(fileName, current);
+            current.Files[fileName] = newFile;
+            this.AddFileToHashOrQueueForHashing(newFile);
         }
 
         private bool FileExistsInLoadedState(string path)
@@ -398,6 +533,24 @@ namespace Codevoid.Utility.FileDeduper
             return current.Files.ContainsKey(fileName);
         }
 
+        private void AddFileToHashOrQueueForHashing(FileNode file)
+        {
+            if(file.Hash == null)
+            {
+                this._itemsRequiringHashing.Enqueue(file);
+                return;
+            }
+
+            IList<FileNode> duplicates;
+            if (!this._hashToDuplicates.TryGetValue(file.Hash, out duplicates))
+            {
+                duplicates = new List<FileNode>();
+                this._hashToDuplicates.Add(file.Hash, duplicates);
+            }
+
+            duplicates.Add(file);
+        }
+
         #region State Saving
         private static void AddFilesIntoSavedState(ICollection<DirectoryNode> directories, ICollection<FileNode> files, XmlElement parent)
         {
@@ -436,7 +589,7 @@ namespace Codevoid.Utility.FileDeduper
         #endregion State Saving
 
         #region State Loading
-        private static DirectoryNode LoadState(string path)
+        private void LoadState(string path)
         {
             XmlDocument state = new XmlDocument();
             state.Load(path);
@@ -444,12 +597,12 @@ namespace Codevoid.Utility.FileDeduper
             XmlElement rootOfState = state.DocumentElement as XmlElement;
 
             DirectoryNode root = new DirectoryNode(String.Empty, null);
-            Program.ProcessNodes(root, rootOfState.ChildNodes);
+            this.ProcessNodes(root, rootOfState.ChildNodes);
 
-            return root;
+            this._rootNode = root;
         }
 
-        private static void ProcessNodes(DirectoryNode parent, XmlNodeList children)
+        private void ProcessNodes(DirectoryNode parent, XmlNodeList children)
         {
             foreach (XmlNode n in children)
             {
@@ -459,7 +612,7 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     case "Folder":
                         var newFolder = new DirectoryNode(item.GetAttribute("Name"), parent);
-                        Program.ProcessNodes(newFolder, item.ChildNodes);
+                        this.ProcessNodes(newFolder, item.ChildNodes);
                         parent.Directories[newFolder.Name] = newFolder;
                         break;
 
@@ -475,6 +628,8 @@ namespace Codevoid.Utility.FileDeduper
                         }
 
                         parent.Files[fileName] = newFile;
+
+                        this.AddFileToHashOrQueueForHashing(newFile);
                         break;
                 }
             }
@@ -482,10 +637,25 @@ namespace Codevoid.Utility.FileDeduper
         #endregion State Loading
 
         #region Utility
-        private static void UpdateConsole(string message, ulong count)
+        private static void UpdateConsole(string message, string data)
         {
             Console.SetCursorPosition(0, Console.CursorTop);
-            Console.Write(message, count);
+
+            // If the output is too large to fit on one line, lets
+            // trim the *Beginning* of the data so we see the end
+            // e.g. to see the filename rather than some repeated
+            // part of a file path
+            var totalLength = message.Length + data.Length;
+            if(totalLength > Console.BufferWidth)
+            {
+                var excess = totalLength - Console.BufferWidth;
+                if(excess < data.Length)
+                {
+                    data = data.Remove(0, excess);
+                }
+            }
+
+            Console.Write(message, data);
         }
 
         private static void PrintUsage()
@@ -518,11 +688,11 @@ namespace Codevoid.Utility.FileDeduper
 
         private static byte[] GetHashBytesFromString(string innerText)
         {
-            Debug.Assert(innerText.Length == 40, "Hash is not the correct length");
-            List<byte> bytes = new List<byte>(20);
+            Debug.Assert(innerText.Length == 32, "Hash is not the correct length");
+            List<byte> bytes = new List<byte>(16);
 
             // Stride over the two chars at a time (two chars = 1 hex byte)
-            for(var i = 0; i < 40; i +=2)
+            for(var i = 0; i < innerText.Length; i +=2)
             {
                 string byteAsHex = innerText.Substring(i, 2);
                 byte parsedValue;
