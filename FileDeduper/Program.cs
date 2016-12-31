@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Xml;
 
@@ -8,30 +10,78 @@ namespace Codevoid.Utility.FileDeduper
     class DirectoryNode
     {
         private string _name;
-        private Dictionary<string, string> _files;
+        private Dictionary<string, FileNode> _files;
         private Dictionary<string, DirectoryNode> _directories;
         private DirectoryNode _parent;
 
         internal DirectoryNode(string name, DirectoryNode parent)
         {
             this._name = name;
-            this._files = new Dictionary<string, string>();
+            this._files = new Dictionary<string, FileNode>();
             this._directories = new Dictionary<string, DirectoryNode>();
             this._parent = parent;
         }
 
-        public string Name
+        internal string Name
         { get { return this._name; } }
 
-        public IDictionary<string, string> Files
+        internal IDictionary<string, FileNode> Files
         { get { return this._files; } }
 
-        public IDictionary<string, DirectoryNode> Directories
+        internal IDictionary<string, DirectoryNode> Directories
         { get { return this._directories; } }
 
-        public DirectoryNode Parent
+        internal DirectoryNode Parent
         {
             get { return this._parent; }
+        }
+    }
+
+    class FileNode
+    {
+        private string _name;
+        private DirectoryNode _parent;
+        private string _hashAsString;
+        private byte[] _hash;
+
+        internal FileNode(string name, DirectoryNode parent)
+        {
+            this._name = name;
+            this._parent = parent;
+        }
+
+        internal string Name
+        { get { return this._name; } }
+
+        internal DirectoryNode Parent
+        { get { return this._parent; } }
+
+        internal byte[] Hash
+        {
+            get { return this._hash; }
+            set
+            {
+                this._hash = value;
+                this._hashAsString = null;
+            }
+        }
+
+        internal string HashAsString
+        {
+            get
+            {
+                if (this._hash == null)
+                {
+                    return null;
+                }
+
+                if(this._hashAsString == null)
+                {
+                    this._hashAsString = BitConverter.ToString(this._hash).Replace("-", "");
+                }
+
+                return this._hashAsString;
+            }
         }
     }
 
@@ -60,6 +110,7 @@ namespace Codevoid.Utility.FileDeduper
         private string _statePath = "state.xml";
         private bool _skipFileSystemCheck;
         private bool _wasCancelled;
+        private Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
 
         bool ParseArgs(string[] args)
         {
@@ -216,6 +267,7 @@ namespace Codevoid.Utility.FileDeduper
                 // Write the loaded data to disk
                 XmlDocument state = new XmlDocument();
                 var rootOfState = state.CreateElement("State");
+                rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
                 state.AppendChild(rootOfState);
 
                 Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
@@ -283,7 +335,7 @@ namespace Codevoid.Utility.FileDeduper
             // Since we're looking a file, we can assume that the
             // dictionary looking up will give us the conclusive
             // answer (since we found the folder path already)
-            current.Files[fileName] = fileName;
+            current.Files[fileName] = new FileNode(fileName, current);
         }
 
         private bool FileExistsInLoadedState(string path)
@@ -347,7 +399,7 @@ namespace Codevoid.Utility.FileDeduper
         }
 
         #region State Saving
-        private static void AddFilesIntoSavedState(ICollection<DirectoryNode> directories, ICollection<string> files, XmlElement parent)
+        private static void AddFilesIntoSavedState(ICollection<DirectoryNode> directories, ICollection<FileNode> files, XmlElement parent)
         {
             foreach (var dn in directories)
             {
@@ -370,7 +422,14 @@ namespace Codevoid.Utility.FileDeduper
             foreach (var file in files)
             {
                 var fileElement = parent.OwnerDocument.CreateElement("File");
-                fileElement.SetAttribute("Name", file);
+                fileElement.SetAttribute("Name", file.Name);
+
+                var hash = file.HashAsString;
+                if(!String.IsNullOrEmpty(hash))
+                {
+                    fileElement.AppendChild(parent.OwnerDocument.CreateTextNode(hash));
+                }
+
                 parent.AppendChild(fileElement);
             }
         }
@@ -406,7 +465,16 @@ namespace Codevoid.Utility.FileDeduper
 
                     case "File":
                         var fileName = item.GetAttribute("Name");
-                        parent.Files[fileName] = fileName;
+                        var newFile = new FileNode(fileName, parent);
+                        
+                        if(item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
+                        {
+                            // Assume we have the hash, so convert the child text to the byte[]
+                            byte[] hash = Program.GetHashBytesFromString(item.FirstChild.InnerText);
+                            newFile.Hash = hash;
+                        }
+
+                        parent.Files[fileName] = newFile;
                         break;
                 }
             }
@@ -446,6 +514,23 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             return String.Join("\\", components);
+        }
+
+        private static byte[] GetHashBytesFromString(string innerText)
+        {
+            Debug.Assert(innerText.Length == 40, "Hash is not the correct length");
+            List<byte> bytes = new List<byte>(20);
+
+            // Stride over the two chars at a time (two chars = 1 hex byte)
+            for(var i = 0; i < 40; i +=2)
+            {
+                string byteAsHex = innerText.Substring(i, 2);
+                byte parsedValue;
+                Byte.TryParse(byteAsHex, NumberStyles.HexNumber, null, out parsedValue);
+                bytes.Add(parsedValue);
+            }
+
+            return bytes.ToArray();
         }
         #endregion Utility
     }
