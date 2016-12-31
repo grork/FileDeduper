@@ -10,12 +10,14 @@ namespace Codevoid.Utility.FileDeduper
         private string _name;
         private Dictionary<string, string> _files;
         private Dictionary<string, DirectoryNode> _directories;
+        private DirectoryNode _parent;
 
-        internal DirectoryNode(string name)
+        internal DirectoryNode(string name, DirectoryNode parent)
         {
             this._name = name;
             this._files = new Dictionary<string, string>();
             this._directories = new Dictionary<string, DirectoryNode>();
+            this._parent = parent;
         }
 
         public string Name
@@ -26,6 +28,11 @@ namespace Codevoid.Utility.FileDeduper
 
         public IDictionary<string, DirectoryNode> Directories
         { get { return this._directories; } }
+
+        public DirectoryNode Parent
+        {
+            get { return this._parent; }
+        }
     }
 
     class Program
@@ -102,7 +109,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private void Console_CancelKeyPress(object sender, ConsoleCancelEventArgs e)
         {
-            lock(this)
+            lock (this)
             {
                 this._wasCancelled = true;
                 e.Cancel = true;
@@ -129,9 +136,9 @@ namespace Codevoid.Utility.FileDeduper
                 Console.WriteLine("State File not found, loading information from the file system");
             }
 
-            if(this._rootNode == null)
+            if (this._rootNode == null)
             {
-                this._rootNode = new DirectoryNode(String.Empty);
+                this._rootNode = new DirectoryNode(String.Empty, null);
             }
 
             ulong addedFileCount = 0;
@@ -170,24 +177,24 @@ namespace Codevoid.Utility.FileDeduper
                     // Check the files to see if we already have information about them
                     foreach (var childFile in childFiles)
                     {
+                        lock (this)
+                        {
+                            if (this._wasCancelled)
+                            {
+                                cancelled = true;
+                                break;
+                            }
+                        }
+
                         if (!this.FileExistsInLoadedState(childFile))
                         {
-                            lock(this)
-                            {
-                                if(this._wasCancelled)
-                                {
-                                    cancelled = true;
-                                    break;
-                                }
-                            }
-
                             // File needs to added to the tree, so process it
                             this.AddFileToLoadedState(childFile);
                             addedFileCount++;
                         }
                     }
 
-                    if(cancelled)
+                    if (cancelled)
                     {
                         Console.WriteLine();
                         Console.WriteLine("Execution cancelled: Saving state for resuming later");
@@ -261,12 +268,12 @@ namespace Codevoid.Utility.FileDeduper
                 }
 
                 DirectoryNode directory = null;
-                
+
                 // If any part of the path isn't found in the
                 // dictionaries, we need to fill in the missing parts
                 if (!current.Directories.TryGetValue(component, out directory))
                 {
-                    directory = new DirectoryNode(component);
+                    directory = new DirectoryNode(component, current);
                     current.Directories[component] = directory;
                 }
 
@@ -377,7 +384,7 @@ namespace Codevoid.Utility.FileDeduper
 
             XmlElement rootOfState = state.DocumentElement as XmlElement;
 
-            DirectoryNode root = new DirectoryNode("");
+            DirectoryNode root = new DirectoryNode(String.Empty, null);
             Program.ProcessNodes(root, rootOfState.ChildNodes);
 
             return root;
@@ -392,7 +399,7 @@ namespace Codevoid.Utility.FileDeduper
                 switch (item.Name)
                 {
                     case "Folder":
-                        var newFolder = new DirectoryNode(item.GetAttribute("Name"));
+                        var newFolder = new DirectoryNode(item.GetAttribute("Name"), parent);
                         Program.ProcessNodes(newFolder, item.ChildNodes);
                         parent.Directories[newFolder.Name] = newFolder;
                         break;
@@ -426,6 +433,19 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine("FileDeduper -- Scans a file tree and lists any idenitical files");
             Console.WriteLine("Copyright 2016, Dominic Hopton");
             Console.WriteLine();
+        }
+
+        private static string GetPathForDirectory(DirectoryNode dn)
+        {
+            List<string> components = new List<string>();
+
+            while(dn != null)
+            {
+                components.Insert(0, dn.Name);
+                dn = dn.Parent;
+            }
+
+            return String.Join("\\", components);
         }
         #endregion Utility
     }
