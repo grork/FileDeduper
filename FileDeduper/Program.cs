@@ -269,7 +269,7 @@ namespace Codevoid.Utility.FileDeduper
 
                     // If the directory is somewhere under our destination for moving
                     // then exclude that directory.
-                    if(directory.StartsWith(this._duplicateDestinationRoot))
+                    if(this._duplicateDestinationRoot != null && directory.StartsWith(this._duplicateDestinationRoot))
                     {
                         continue;
                     }
