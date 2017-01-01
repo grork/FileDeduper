@@ -762,7 +762,7 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine("Arguments:");
             Console.WriteLine("/r[oot]:   The root path where to start this search from.");
             Console.WriteLine("/res[ume]: Loads the state file, and continues from where it was. This will check the file system for new files");
-            Console.WriteLine("/sf[ate]:  File path for state to be saved. If not specified, saves 'State.xml' in the working directory");
+            Console.WriteLine("/st[ate]:  File path for state to be saved. If not specified, saves 'State.xml' in the working directory");
             Console.WriteLine("/skip:     Skips checking the file system and only uses the saved state to determine work");
             Console.WriteLine("/d[estinationroot]: Full path to a directory root to exclude");
 
