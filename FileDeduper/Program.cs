@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Security;
 using System.Security.Cryptography;
 using System.Xml;
 
@@ -138,6 +139,11 @@ namespace Codevoid.Utility.FileDeduper
 
     class Program
     {
+        /// <summary>
+        /// The number of successful hashes to compute before saving state "mid stream"
+        /// </summary>
+        private const ulong NUMBER_OF_HASHES_BEFORE_SAVING_STATE = 50000;
+
         static void Main(string[] args)
         {
             var app = new Program();
@@ -351,17 +357,25 @@ namespace Codevoid.Utility.FileDeduper
                 Console.WriteLine("Hashing {0} File(s). Starting at: {1}", this._itemsRequiringHashing.Count, hashingStart);
 
                 this._hasher = new MD5CryptoServiceProvider();
+                ulong filesHashedSinceLastSave = 0;
 
                 // Any items that reuqired hashing have been added to the queue
                 // or been placed in the duplicate list, so lets hash the ones
                 // that require work
                 while (this._itemsRequiringHashing.Count > 0)
                 {
+                    if(filesHashedSinceLastSave > Program.NUMBER_OF_HASHES_BEFORE_SAVING_STATE)
+                    {
+                        this.SaveCurrentStateToDisk();
+                        filesHashedSinceLastSave = 0;
+                    }
+
                     var fileToHash = this._itemsRequiringHashing.Dequeue();
 
                     this.HashFileAndUpdateState(fileToHash);
 
                     filesHashed++;
+                    filesHashedSinceLastSave++;
 
                     lock (this)
                     {
@@ -485,9 +499,26 @@ namespace Codevoid.Utility.FileDeduper
             string filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
             Program.UpdateConsole("Hashing File: {0}", filePath);
 
-            using (var fileStream = File.OpenRead(filePath))
+            try
             {
-                fileToHash.Hash = this._hasher.ComputeHash(fileStream);
+                using (var fileStream = File.OpenRead(filePath))
+                {
+                    fileToHash.Hash = this._hasher.ComputeHash(fileStream);
+                }
+            }
+            catch(SecurityException)
+            {
+                return;
+            }
+            catch(FileNotFoundException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Couldn't hash: {0}", filePath);
+                return;
             }
 
             this.AddFileToHashOrQueueForHashing(fileToHash);
@@ -750,6 +781,12 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     data = data.Remove(0, excess);
                 }
+            }
+
+            if(totalLength < Console.BufferWidth)
+            {
+                // Pad the rest of the data with spaces
+                data = data + new String(' ', Console.BufferWidth - totalLength);
             }
 
             Console.Write(message, data);
