@@ -76,7 +76,7 @@ namespace Codevoid.Utility.FileDeduper
                     return null;
                 }
 
-                if(this._hashAsString == null)
+                if (this._hashAsString == null)
                 {
                     this._hashAsString = BitConverter.ToString(this._hash).Replace("-", "");
                 }
@@ -181,7 +181,7 @@ namespace Codevoid.Utility.FileDeduper
                     case "/r":
                     case "/root":
                         argIndex++;
-                        this._root = @"\\?\" + args[argIndex];
+                        this._root = @"\\?\" + args[argIndex].ToLower();
                         break;
 
                     case "/res":
@@ -202,7 +202,7 @@ namespace Codevoid.Utility.FileDeduper
                     case "/d":
                     case "/destinationroot":
                         argIndex++;
-                        this._duplicateDestinationRoot = args[argIndex];
+                        this._duplicateDestinationRoot = @"\\?\" + args[argIndex].ToLower();
                         break;
 
 
@@ -255,7 +255,7 @@ namespace Codevoid.Utility.FileDeduper
 
             ulong addedFileCount = 0;
             bool cancelled = false;
-            
+
             // Discover files from the file system
             if (!this._skipFileSystemCheck)
             {
@@ -266,6 +266,13 @@ namespace Codevoid.Utility.FileDeduper
                 while (directories.Count > 0)
                 {
                     var directory = directories.Dequeue();
+
+                    // If the directory is somewhere under our destination for moving
+                    // then exclude that directory.
+                    if(directory.StartsWith(this._duplicateDestinationRoot))
+                    {
+                        continue;
+                    }
 
                     // Scavange all the directories we need to look at
                     // and add them to the queue to be processed
@@ -332,51 +339,52 @@ namespace Codevoid.Utility.FileDeduper
             // If we were cancelled, lets not continue on to process
             // the file hashes 'cause the customer is implying we
             // should give up
-            if(cancelled)
+            if (cancelled)
             {
                 return;
             }
 
             ulong filesHashed = 0;
-            if(this._itemsRequiringHashing.Count < 1)
+            if (this._itemsRequiringHashing.Count > 0)
             {
-                Console.WriteLine("No files needed hashing");
-                return;
-            }
+                DateTime hashingStart = DateTime.Now;
+                Console.WriteLine("Hashing {0} File(s). Starting at: {1}", this._itemsRequiringHashing.Count, hashingStart);
 
-            DateTime hashingStart = DateTime.Now;
-            Console.WriteLine("Hashing {0} File(s). Starting at: {1}", this._itemsRequiringHashing.Count, hashingStart);
+                this._hasher = new MD5CryptoServiceProvider();
 
-            this._hasher = new MD5CryptoServiceProvider();
-
-            // Any items that reuqired hashing have been added to the queue
-            // or been placed in the duplicate list, so lets hash the ones
-            // that require work
-            while(this._itemsRequiringHashing.Count > 0)
-            {
-                var fileToHash = this._itemsRequiringHashing.Dequeue();
-
-                this.HashFileAndUpdateState(fileToHash);
-
-                filesHashed++;
-
-                lock(this)
+                // Any items that reuqired hashing have been added to the queue
+                // or been placed in the duplicate list, so lets hash the ones
+                // that require work
+                while (this._itemsRequiringHashing.Count > 0)
                 {
-                    if(this._wasCancelled)
+                    var fileToHash = this._itemsRequiringHashing.Dequeue();
+
+                    this.HashFileAndUpdateState(fileToHash);
+
+                    filesHashed++;
+
+                    lock (this)
                     {
-                        Console.WriteLine();
-                        cancelled = true;
-                        break;
+                        if (this._wasCancelled)
+                        {
+                            Console.WriteLine();
+                            cancelled = true;
+                            break;
+                        }
                     }
                 }
-            }
 
-            if(filesHashed > 0)
+                if (filesHashed > 0)
+                {
+                    this.SaveCurrentStateToDisk();
+                }
+            }
+            else
             {
-                this.SaveCurrentStateToDisk();
+                Console.WriteLine("No files needed hashing");
             }
 
-            if(cancelled)
+            if (cancelled)
             {
                 return;
             }
@@ -384,23 +392,92 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine();
             Console.WriteLine("Hashing {0} file(s) took {1}", filesHashed, DateTime.Now - start);
 
-            ulong filesWithDuplicates = 0;
+            Queue<IList<FileNode>> filesWithDuplicates = new Queue<IList<FileNode>>();
+
             // Calculate Duplicate Statistics
             foreach (var kvp in this._hashToDuplicates)
             {
-                if(kvp.Value.Count > 1)
+                if (kvp.Value.Count > 1)
                 {
-                    filesWithDuplicates++;
+                    filesWithDuplicates.Enqueue(kvp.Value);
                 }
             }
 
-            if (filesWithDuplicates == 0)
+            if (filesWithDuplicates.Count == 0)
             {
                 Console.WriteLine("No duplicate files found");
                 return;
             }
 
-            Console.WriteLine("Duplicate Files Found: {0}", filesWithDuplicates);
+            Console.WriteLine("Duplicate Files Found: {0}", filesWithDuplicates.Count);
+
+            // If theres no destination directory, then we can't move anything
+            if (this._duplicateDestinationRoot != null)
+            {
+                ulong filesMoved = 0;
+                Directory.CreateDirectory(this._duplicateDestinationRoot);
+                while (filesWithDuplicates.Count > 0)
+                {
+                    var duplicateList = filesWithDuplicates.Dequeue();
+
+                    filesMoved += this.MoveDuplicatesToDestinationTree(duplicateList, this._duplicateDestinationRoot);
+
+                    lock (this)
+                    {
+                        if (this._wasCancelled)
+                        {
+                            Console.WriteLine();
+                            cancelled = true;
+                            break;
+                        }
+                    }
+                }
+
+                Console.WriteLine();
+                Console.WriteLine("Files moved: {0}", filesMoved);
+            }
+        }
+
+        private ulong MoveDuplicatesToDestinationTree(IList<FileNode> duplicateList, string _duplicateDestinationRoot)
+        {
+            bool firstSkipped = false;
+            ulong filesMoved = 0;
+            foreach(var file in duplicateList)
+            {
+                // Leave the first file in place, since we want to keep an original
+                if(!firstSkipped)
+                {
+                    firstSkipped = true;
+                    continue;
+                }
+
+                lock(this)
+                {
+                    if(this._wasCancelled)
+                    {
+                        return filesMoved;
+                    }
+                }
+
+                var treeSubPath = Path.Combine(Program.GetPathForDirectory(file.Parent), file.Name);
+
+                string sourceFilePath = this._root + treeSubPath;
+                if(!File.Exists(sourceFilePath))
+                {
+                    Console.WriteLine("Skipping File, source no longer present: {0}", sourceFilePath);
+                    continue;
+                }
+
+                string destinationFilePath = this._duplicateDestinationRoot + treeSubPath;
+                string destinationDirectory = Path.GetDirectoryName(destinationFilePath);
+                Directory.CreateDirectory(destinationDirectory);
+                File.Move(sourceFilePath, destinationFilePath);
+                filesMoved++;
+
+                Program.UpdateConsole("Moved to duplicate directory: {0}", sourceFilePath);
+            }
+
+            return filesMoved;
         }
 
         private void HashFileAndUpdateState(FileNode fileToHash)
@@ -408,8 +485,10 @@ namespace Codevoid.Utility.FileDeduper
             string filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
             Program.UpdateConsole("Hashing File: {0}", filePath);
 
-            var fileStream = File.OpenRead(filePath);
-            fileToHash.Hash = this._hasher.ComputeHash(fileStream);
+            using (var fileStream = File.OpenRead(filePath))
+            {
+                fileToHash.Hash = this._hasher.ComputeHash(fileStream);
+            }
 
             this.AddFileToHashOrQueueForHashing(fileToHash);
         }
@@ -553,7 +632,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private void AddFileToHashOrQueueForHashing(FileNode file)
         {
-            if(file.Hash == null)
+            if (file.Hash == null)
             {
                 this._itemsRequiringHashing.Enqueue(file);
                 return;
@@ -596,7 +675,7 @@ namespace Codevoid.Utility.FileDeduper
                 fileElement.SetAttribute("Name", file.Name);
 
                 var hash = file.HashAsString;
-                if(!String.IsNullOrEmpty(hash))
+                if (!String.IsNullOrEmpty(hash))
                 {
                     fileElement.AppendChild(parent.OwnerDocument.CreateTextNode(hash));
                 }
@@ -637,8 +716,8 @@ namespace Codevoid.Utility.FileDeduper
                     case "File":
                         var fileName = item.GetAttribute("Name");
                         var newFile = new FileNode(fileName, parent);
-                        
-                        if(item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
+
+                        if (item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
                         {
                             // Assume we have the hash, so convert the child text to the byte[]
                             byte[] hash = Program.GetHashBytesFromString(item.FirstChild.InnerText);
@@ -664,10 +743,10 @@ namespace Codevoid.Utility.FileDeduper
             // e.g. to see the filename rather than some repeated
             // part of a file path
             var totalLength = message.Length + data.Length;
-            if(totalLength > Console.BufferWidth)
+            if (totalLength > Console.BufferWidth)
             {
                 var excess = totalLength - Console.BufferWidth;
-                if(excess < data.Length)
+                if (excess < data.Length)
                 {
                     data = data.Remove(0, excess);
                 }
@@ -700,7 +779,7 @@ namespace Codevoid.Utility.FileDeduper
         {
             List<string> components = new List<string>();
 
-            while(dn != null)
+            while (dn != null)
             {
                 components.Insert(0, dn.Name);
                 dn = dn.Parent;
@@ -715,7 +794,7 @@ namespace Codevoid.Utility.FileDeduper
             List<byte> bytes = new List<byte>(16);
 
             // Stride over the two chars at a time (two chars = 1 hex byte)
-            for(var i = 0; i < innerText.Length; i +=2)
+            for (var i = 0; i < innerText.Length; i += 2)
             {
                 string byteAsHex = innerText.Substring(i, 2);
                 byte parsedValue;
