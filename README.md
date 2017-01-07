@@ -1,4 +1,4 @@
-﻿FileDeduper
+FileDeduper
 ===========
 
 This tool is intended to assist in cleaning up large collections of files by finding & moving duplicate files -- that is to say files that are _exactly_ the same, no matter their path or filename.
