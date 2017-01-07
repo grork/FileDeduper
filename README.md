@@ -14,14 +14,15 @@ Depending on the number of files, speed of disk the files are on, performance of
 
 For my intended usage -- and the original set of files I wanted to process -- here are some benchmarks:
 
-- ~5.3 _million_ files
-- 1.9tb of data
+> ~5.3 _million_ files
+
+> 1.9tb of data
 
 > Time to discover the files: 21min (3min 40s if file system was cached)
 
 > Time to hash all the files: 15hrs 37min
 
-> Time to "move" 1.5milliond duplicates: 15hrs
+> Time to "move" 1.5million duplicates: 15hrs
 
 > Peak Memory usage: 4gb
 
