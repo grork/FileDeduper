@@ -11,52 +11,32 @@ namespace Codevoid.Utility.FileDeduper
 {
     class DirectoryNode
     {
-        private string _name;
-        private Dictionary<string, FileNode> _files;
-        private Dictionary<string, DirectoryNode> _directories;
-        private DirectoryNode _parent;
-
         internal DirectoryNode(string name, DirectoryNode parent)
         {
-            this._name = name;
-            this._files = new Dictionary<string, FileNode>();
-            this._directories = new Dictionary<string, DirectoryNode>();
-            this._parent = parent;
+            this.Name = name;
+            this.Files = new Dictionary<string, FileNode>();
+            this.Directories = new Dictionary<string, DirectoryNode>();
+            this.Parent = parent;
         }
 
-        internal string Name
-        { get { return this._name; } }
-
-        internal IDictionary<string, FileNode> Files
-        { get { return this._files; } }
-
-        internal IDictionary<string, DirectoryNode> Directories
-        { get { return this._directories; } }
-
-        internal DirectoryNode Parent
-        {
-            get { return this._parent; }
-        }
+        internal string Name { get; }
+        internal IDictionary<string, FileNode> Files { get; }
+        internal IDictionary<string, DirectoryNode> Directories { get; }
+        internal DirectoryNode Parent { get; }
     }
 
     class FileNode
     {
-        private string _name;
-        private DirectoryNode _parent;
+        internal string Name { get; }
+        internal DirectoryNode Parent { get; }
         private string _hashAsString;
         private byte[] _hash;
 
         internal FileNode(string name, DirectoryNode parent)
         {
-            this._name = name;
-            this._parent = parent;
+            this.Name = name;
+            this.Parent = parent;
         }
-
-        internal string Name
-        { get { return this._name; } }
-
-        internal DirectoryNode Parent
-        { get { return this._parent; } }
 
         internal byte[] Hash
         {
@@ -101,14 +81,18 @@ namespace Codevoid.Utility.FileDeduper
             {
                 return true;
             }
+
             if (first == null || second == null)
             {
                 return false;
             }
+
             if (first.Length != second.Length)
             {
+
                 return false;
             }
+
             for (int i = 0; i < first.Length; i++)
             {
                 if (!s_elementComparer.Equals(first[i], second[i]))
@@ -116,6 +100,7 @@ namespace Codevoid.Utility.FileDeduper
                     return false;
                 }
             }
+
             return true;
         }
 
@@ -147,7 +132,7 @@ namespace Codevoid.Utility.FileDeduper
         static void Main(string[] args)
         {
             var app = new Program();
-            bool parsedArgs = app.ParseArgs(args);
+            var parsedArgs = app.ParseArgs(args);
             if (!parsedArgs)
             {
                 Program.PrintUsage();
@@ -168,8 +153,8 @@ namespace Codevoid.Utility.FileDeduper
         private string _statePath = "state.xml";
         private bool _skipFileSystemCheck;
         private bool _wasCancelled;
-        private Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
-        private IDictionary<byte[], IList<FileNode>> _hashToDuplicates = new Dictionary<byte[], IList<FileNode>>(new ArrayEqualityComparer<byte>());
+        private readonly Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
+        private readonly IDictionary<byte[], IList<FileNode>> _hashToDuplicates = new Dictionary<byte[], IList<FileNode>>(new ArrayEqualityComparer<byte>());
         private HashAlgorithm _hasher;
 
         bool ParseArgs(string[] args)
@@ -260,7 +245,7 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             ulong addedFileCount = 0;
-            bool cancelled = false;
+            var cancelled = false;
 
             // Discover files from the file system
             if (!this._skipFileSystemCheck)
@@ -353,7 +338,7 @@ namespace Codevoid.Utility.FileDeduper
             ulong filesHashed = 0;
             if (this._itemsRequiringHashing.Count > 0)
             {
-                DateTime hashingStart = DateTime.Now;
+                var hashingStart = DateTime.Now;
                 Console.WriteLine("Hashing {0} File(s). Starting at: {1}", this._itemsRequiringHashing.Count, hashingStart);
 
                 this._hasher = new MD5CryptoServiceProvider();
@@ -406,7 +391,7 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine();
             Console.WriteLine("Hashing {0} file(s) took {1}", filesHashed, DateTime.Now - start);
 
-            Queue<IList<FileNode>> filesWithDuplicates = new Queue<IList<FileNode>>();
+            var filesWithDuplicates = new Queue<IList<FileNode>>();
 
             // Calculate Duplicate Statistics
             foreach (var kvp in this._hashToDuplicates)
@@ -454,7 +439,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private ulong MoveDuplicatesToDestinationTree(IList<FileNode> duplicateList, string _duplicateDestinationRoot)
         {
-            bool firstSkipped = false;
+            var firstSkipped = false;
             ulong filesMoved = 0;
             foreach(var file in duplicateList)
             {
@@ -475,15 +460,15 @@ namespace Codevoid.Utility.FileDeduper
 
                 var treeSubPath = Path.Combine(Program.GetPathForDirectory(file.Parent), file.Name);
 
-                string sourceFilePath = this._root + treeSubPath;
+                var sourceFilePath = this._root + treeSubPath;
                 if(!File.Exists(sourceFilePath))
                 {
                     Console.WriteLine("Skipping File, source no longer present: {0}", sourceFilePath);
                     continue;
                 }
 
-                string destinationFilePath = this._duplicateDestinationRoot + treeSubPath;
-                string destinationDirectory = Path.GetDirectoryName(destinationFilePath);
+                var destinationFilePath = this._duplicateDestinationRoot + treeSubPath;
+                var destinationDirectory = Path.GetDirectoryName(destinationFilePath);
                 Directory.CreateDirectory(destinationDirectory);
                 File.Move(sourceFilePath, destinationFilePath);
                 filesMoved++;
@@ -496,7 +481,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private void HashFileAndUpdateState(FileNode fileToHash)
         {
-            string filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
+            var filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
             Program.UpdateConsole("Hashing File: {0}", filePath);
 
             try
@@ -527,7 +512,7 @@ namespace Codevoid.Utility.FileDeduper
         private void SaveCurrentStateToDisk()
         {
             // Write the loaded data to disk
-            XmlDocument state = new XmlDocument();
+            var state = new XmlDocument();
             var rootOfState = state.CreateElement("State");
             rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
             state.AppendChild(rootOfState);
@@ -553,9 +538,8 @@ namespace Codevoid.Utility.FileDeduper
                 workingPath = workingPath.Remove(0, 1);
             }
 
-            string fileName = null;
             // This will include the extension, if there is one
-            fileName = Path.GetFileName(path);
+            string fileName = Path.GetFileName(path);
 
             // This is a file, so we need to strip out the filename
             // from the path we're looking up to ensure that we find
@@ -572,7 +556,7 @@ namespace Codevoid.Utility.FileDeduper
             var current = this._rootNode;
 
             // Break out the path into the individual folder parts
-            string[] components = workingPath.Split('\\');
+            var components = workingPath.Split('\\');
             foreach (string component in components)
             {
                 if (String.IsNullOrEmpty(component))
@@ -580,12 +564,9 @@ namespace Codevoid.Utility.FileDeduper
                     continue;
                 }
 
-                DirectoryNode directory = null;
-
                 // If any part of the path isn't found in the
                 // dictionaries, we need to fill in the missing parts
-                if (!current.Directories.TryGetValue(component, out directory))
-                {
+                if (!current.Directories.TryGetValue(component, out DirectoryNode directory)) {
                     directory = new DirectoryNode(component, current);
                     current.Directories[component] = directory;
                 }
@@ -622,9 +603,8 @@ namespace Codevoid.Utility.FileDeduper
                 workingPath = workingPath.Remove(0, 1);
             }
 
-            string fileName = null;
             // This will include the extension, if there is one
-            fileName = Path.GetFileName(path);
+            var fileName = Path.GetFileName(path);
 
             // This is a file, so we need to strip out the filename
             // from the path we're looking up to ensure that we find
@@ -638,7 +618,7 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             var current = this._rootNode;
-            string[] components = workingPath.Split('\\');
+            var components = workingPath.Split('\\');
             foreach (string component in components)
             {
                 if (String.IsNullOrEmpty(component))
@@ -669,9 +649,7 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
-            IList<FileNode> duplicates;
-            if (!this._hashToDuplicates.TryGetValue(file.Hash, out duplicates))
-            {
+            if (!this._hashToDuplicates.TryGetValue(file.Hash, out IList<FileNode> duplicates)) {
                 duplicates = new List<FileNode>();
                 this._hashToDuplicates.Add(file.Hash, duplicates);
             }
@@ -719,12 +697,12 @@ namespace Codevoid.Utility.FileDeduper
         #region State Loading
         private void LoadState(string path)
         {
-            XmlDocument state = new XmlDocument();
+            var state = new XmlDocument();
             state.Load(path);
 
-            XmlElement rootOfState = state.DocumentElement as XmlElement;
+            var rootOfState = state.DocumentElement as XmlElement;
 
-            DirectoryNode root = new DirectoryNode(String.Empty, null);
+            var root = new DirectoryNode(String.Empty, null);
             this.ProcessNodes(root, rootOfState.ChildNodes);
 
             this._rootNode = root;
@@ -751,7 +729,7 @@ namespace Codevoid.Utility.FileDeduper
                         if (item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
                         {
                             // Assume we have the hash, so convert the child text to the byte[]
-                            byte[] hash = Program.GetHashBytesFromString(item.FirstChild.InnerText);
+                            var hash = Program.GetHashBytesFromString(item.FirstChild.InnerText);
                             newFile.Hash = hash;
                         }
 
@@ -814,7 +792,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private static string GetPathForDirectory(DirectoryNode dn)
         {
-            List<string> components = new List<string>();
+            var components = new List<string>();
 
             while (dn != null)
             {
@@ -828,14 +806,13 @@ namespace Codevoid.Utility.FileDeduper
         private static byte[] GetHashBytesFromString(string innerText)
         {
             Debug.Assert(innerText.Length == 32, "Hash is not the correct length");
-            List<byte> bytes = new List<byte>(16);
+            var bytes = new List<byte>(16);
 
             // Stride over the two chars at a time (two chars = 1 hex byte)
             for (var i = 0; i < innerText.Length; i += 2)
             {
-                string byteAsHex = innerText.Substring(i, 2);
-                byte parsedValue;
-                Byte.TryParse(byteAsHex, NumberStyles.HexNumber, null, out parsedValue);
+                var byteAsHex = innerText.Substring(i, 2);
+                Byte.TryParse(byteAsHex, NumberStyles.HexNumber, null, out byte parsedValue);
                 bytes.Add(parsedValue);
             }
 
