@@ -269,3 +269,7 @@ paket-files/
 # Python Tools for Visual Studio (PTVS)
 __pycache__/
 *.pyc
+
+# Ignore launchSettings.json because it contains local paths, which will not
+# roam onto other devices
+**/[Pp]roperties/launchSettings.json
