@@ -228,7 +228,7 @@ namespace Codevoid.Utility.FileDeduper
                 return false;
             }
 
-            if(!this._duplicateDestinationRoot.Exists)
+            if(this._duplicateDestinationRoot != null && !this._duplicateDestinationRoot.Exists)
             {
                 try
                 {
