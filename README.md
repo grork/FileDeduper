@@ -1,7 +1,7 @@
 FileDeduper
 ===========
 
-This tool is intended to assist in cleaning up large collections of files by finding & moving duplicate files -- that is to say files that are _exactly_ the same, no matter their path or filename.
+This tool is intended to assist in cleaning up large collections of files by finding & moving duplicate files -- that is to say files that are _exactly_ the same, no matter their path or filename
 
 This tool attempts this as three phases:
 1. Enumerate all the files in a folder tree
@@ -32,6 +32,8 @@ Machine Spec:
 - 32gb RAM
 - Quad Core Core i7 (2.7ghz)
 
+This has been tested on Windows 10, and macOS 10.14.
+
 ## Usage ##
 The tool will print it's usage on the command line if no parameters are passed.
 
@@ -47,11 +49,11 @@ For refrence:
 
 Example Usage:
 
-`FileDeduper /root f:\Data`
+`dotnet FileDeduper.dll /root f:\Data`
 
 This will start processing the folder tree starting in `f:\data`, and save it's process in the directory you issued the command in as it progresses.
 
-`FileDeduper /root f:\data /resume`
+`dotnet FileDeduper.dll /root f:\data /resume`
 
 Will start processing the folder tree starting in `f:\data`, and will try to load any data `State.xml`, and compare that against the file system
 
