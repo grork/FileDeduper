@@ -10,9 +10,9 @@ This tool attempts this as three phases:
 
 With each step, and often within each step the state is captured of what has been discovered & hashed up to that point. Additionally, any time you terminate the tool through the use of `Ctrl+C`, state will be saved to allow you to pick up where you left off.
 
-Depending on the number of files, speed of disk the files are on, performance of the computer, and the amount of RAM available, this process can take a long time to complete.
+Depending on the number of files, speed of the disk where the files are located, performance of the computer, and the amount of RAM available, this process can take a very long time to complete.
 
-For my intended usage -- and the original set of files I wanted to process -- here are some benchmarks:
+For my intended usage -- and the original set of files I wanted to clean up -- here are some benchmarks:
 
 > ~5.3 _million_ files
 
@@ -51,21 +51,21 @@ Example Usage:
 
 `dotnet FileDeduper.dll /root f:\Data`
 
-This will start processing the folder tree starting in `f:\data`, and save it's process in the directory you issued the command in as it progresses.
+This will start processing the folder tree starting in `f:\data`, and save it's process in the directory where you executed the command in as it progresses.
 
 `dotnet FileDeduper.dll /root f:\data /resume`
 
 Will start processing the folder tree starting in `f:\data`, and will try to load any data `State.xml`, and compare that against the file system
 
 ## Resuming ##
-When the `/resume` parameter is used, the tool will load the data from the `State.xml` first, compare it against the file system (e.g. reprocess the whole tree), and add anything that is not in the state. After that has completed, it will start generating the MD5 hash for the files. **If** the state file has some hashes already generated, it will **not** regenerate them, and start at the first file that does not have an MD5 hash.
+When the `/resume` parameter is used, the tool will load the data from the `State.xml` first, compare it against the file system (e.g. reprocess the whole tree), and add anything that is not in the previously state. After that has completed, it will start generating the MD5 hash for the files. **If** the state file has some hashes already generated, it will **not** regenerate them, and start at the first file that does not have an MD5 hash.
 
 If you had started hashing during your previous execution, and you know you have not added any files into the folder tree, you can add `/skip` to the parameters, and this will not consult the file system for any changes and jump straight to the MD5 hashing.
 
 ## Deduplication ##
-Becuase the initial use case of this tool was working with data that was impossibly to replace, the deduplication is _non destructive_. That is to say, it doesn't delete any of the data.
+Becuase the initial use case of this tool was working with data that was impossible to replace if lost, the deduplication attempts to be _non destructive_. That is to say, it doesn't delete any of the data.
 
-Deduplication only happens if the `/destinationroot` parameter is supplied, is the files are _moved_ to a new directory following the same folder structure it had previously, reparened under the destination root. This means that it's possible to move the duplicates out of the way, and preserve the data in case of something _really bad_ happening.
+Deduplication only happens if the `/destinationroot` parameter is supplied. If it is, the files are _moved_ to a new directory following the original folder structure, reparented under the destination root. This means that it's possible to move the duplicates out of the way, and preserve the data in case of something _really bad_ happening.
 
-It should be noted that if you put the destination on a separate physical drive, the duration of the move phase will drastically increase since it has to physically move the files, rather than just update the file system with it's location.
+It should be noted that if you put the destination on a separate physical drive, the duration of the move phase will drastically increase since it has to physically move the files, rather than just update the file system in place.
 

@@ -442,7 +442,7 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
-            Console.WriteLine("Duplicate Files Found: {0}", filesWithDuplicates.Count);
+            Console.WriteLine("Files with duplicates: {0}", filesWithDuplicates.Count);
 
             // If theres no destination directory, then we can't move anything
             if (this._duplicateDestinationRoot != null)
@@ -808,8 +808,14 @@ namespace Codevoid.Utility.FileDeduper
         {
             Program.PrintHeader();
 
-            Console.WriteLine("Arguments:");
+            Console.WriteLine("Usage");
+            Console.WriteLine("=====");
+            Console.WriteLine("dotnet FileDeduper.dll /root <path to find duplicates in>");
+            Console.WriteLine();
+            Console.WriteLine("Required:");
             Console.WriteLine("/r[oot]:   The root path where to start this search from.");
+            Console.WriteLine();
+            Console.WriteLine("Optional:");
             Console.WriteLine("/res[ume]: Loads the state file, and continues from where it was. This will check the file system for new files");
             Console.WriteLine("/st[ate]:  File path for state to be saved. If not specified, saves 'State.xml' in the working directory");
             Console.WriteLine("/skip:     Skips checking the file system and only uses the saved state to determine work");
