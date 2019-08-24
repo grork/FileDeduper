@@ -273,3 +273,6 @@ __pycache__/
 # Ignore launchSettings.json because it contains local paths, which will not
 # roam onto other devices
 **/[Pp]roperties/launchSettings.json
+
+# Ignore SampleData Folder
+SampleData/
