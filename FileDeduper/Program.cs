@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
 using System.Xml;
@@ -139,6 +140,11 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
+            if(!app.ValidateReadyToBegin())
+            {
+                return;
+            }
+
             // Reduce flicker when we update the processed file count
             Console.CursorVisible = false;
 
@@ -146,9 +152,9 @@ namespace Codevoid.Utility.FileDeduper
             app.Begin();
         }
 
-        private string _root;
-        private string _duplicateDestinationRoot;
-        private DirectoryNode _rootNode;
+        private DirectoryInfo _root;
+        private DirectoryInfo _duplicateDestinationRoot;
+        private DirectoryNode _rootNode = new DirectoryNode(String.Empty, null);
         private bool _resume;
         private string _statePath = "state.xml";
         private bool _skipFileSystemCheck;
@@ -156,8 +162,17 @@ namespace Codevoid.Utility.FileDeduper
         private readonly Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
         private readonly IDictionary<byte[], IList<FileNode>> _hashToDuplicates = new Dictionary<byte[], IList<FileNode>>(new ArrayEqualityComparer<byte>());
         private HashAlgorithm _hasher;
+        private readonly string _rootPathPrefix = String.Empty;
 
-        bool ParseArgs(string[] args)
+        private Program()
+        {
+            if(RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                this._rootPathPrefix = @"\\?\";
+            }
+        }
+
+        private bool ParseArgs(string[] args)
         {
             if (args.Length < 2)
             {
@@ -172,7 +187,7 @@ namespace Codevoid.Utility.FileDeduper
                     case "/r":
                     case "/root":
                         argIndex++;
-                        this._root = @"\\?\" + args[argIndex].ToLower();
+                        this._root = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
                         break;
 
                     case "/res":
@@ -193,12 +208,36 @@ namespace Codevoid.Utility.FileDeduper
                     case "/d":
                     case "/destinationroot":
                         argIndex++;
-                        this._duplicateDestinationRoot = @"\\?\" + args[argIndex].ToLower();
+                        this._duplicateDestinationRoot = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
                         break;
 
 
                     default:
                         break;
+                }
+            }
+
+            return true;
+        }
+
+        private bool ValidateReadyToBegin()
+        {
+            if(!this._root.Exists)
+            {
+                Console.WriteLine($"Root directory '${this._root.FullName}' wasn't found");
+                return false;
+            }
+
+            if(!this._duplicateDestinationRoot.Exists)
+            {
+                try
+                {
+                    this._duplicateDestinationRoot.Create();
+                }
+                catch(IOException)
+                {
+                    Console.WriteLine($"Unable to create directory for duplicates at '${this._duplicateDestinationRoot.FullName}'");
+                    return false;
                 }
             }
 
@@ -219,7 +258,7 @@ namespace Codevoid.Utility.FileDeduper
             }
         }
 
-        void Begin()
+        private void Begin()
         {
             Program.PrintHeader();
 
@@ -239,11 +278,6 @@ namespace Codevoid.Utility.FileDeduper
                 Console.WriteLine("State File not found, loading information from the file system");
             }
 
-            if (this._rootNode == null)
-            {
-                this._rootNode = new DirectoryNode(String.Empty, null);
-            }
-
             ulong addedFileCount = 0;
             var cancelled = false;
 
@@ -251,7 +285,7 @@ namespace Codevoid.Utility.FileDeduper
             if (!this._skipFileSystemCheck)
             {
                 // Validate the state against the file system.
-                var directories = new Queue<string>();
+                var directories = new Queue<DirectoryInfo>();
                 directories.Enqueue(this._root);
 
                 while (directories.Count > 0)
@@ -260,17 +294,17 @@ namespace Codevoid.Utility.FileDeduper
 
                     // If the directory is somewhere under our destination for moving
                     // then exclude that directory.
-                    if(this._duplicateDestinationRoot != null && directory.StartsWith(this._duplicateDestinationRoot))
+                    if(this._duplicateDestinationRoot != null && directory.FullName.StartsWith(this._duplicateDestinationRoot.FullName))
                     {
                         continue;
                     }
 
                     // Scavange all the directories we need to look at
                     // and add them to the queue to be processed
-                    IEnumerable<string> childDirectories;
+                    IEnumerable<DirectoryInfo> childDirectories;
                     try
                     {
-                        childDirectories = Directory.EnumerateDirectories(directory);
+                        childDirectories = directory.EnumerateDirectories();
                     }
                     // We need to catch these since there are many
                     // folders we might not have access to or might
@@ -283,7 +317,7 @@ namespace Codevoid.Utility.FileDeduper
                         directories.Enqueue(childDir);
                     }
 
-                    IEnumerable<string> childFiles = Directory.EnumerateFiles(directory);
+                    IEnumerable<FileInfo> childFiles = directory.EnumerateFiles();
 
                     // Check the files to see if we already have information about them
                     foreach (var childFile in childFiles)
@@ -297,10 +331,10 @@ namespace Codevoid.Utility.FileDeduper
                             }
                         }
 
-                        if (!this.FileExistsInLoadedState(childFile))
+                        if (!this.FileExistsInLoadedState(childFile.FullName))
                         {
                             // File needs to added to the tree, so process it
-                            this.AddFileToLoadedState(childFile);
+                            this.AddFileToLoadedState(childFile.FullName);
                             addedFileCount++;
                         }
                     }
@@ -414,12 +448,12 @@ namespace Codevoid.Utility.FileDeduper
             if (this._duplicateDestinationRoot != null)
             {
                 ulong filesMoved = 0;
-                Directory.CreateDirectory(this._duplicateDestinationRoot);
+                this._duplicateDestinationRoot.Create();
                 while (filesWithDuplicates.Count > 0)
                 {
                     var duplicateList = filesWithDuplicates.Dequeue();
 
-                    filesMoved += this.MoveDuplicatesToDestinationTree(duplicateList, this._duplicateDestinationRoot);
+                    filesMoved += this.MoveDuplicatesToDestinationTree(duplicateList);
 
                     lock (this)
                     {
@@ -437,7 +471,7 @@ namespace Codevoid.Utility.FileDeduper
             }
         }
 
-        private ulong MoveDuplicatesToDestinationTree(IList<FileNode> duplicateList, string _duplicateDestinationRoot)
+        private ulong MoveDuplicatesToDestinationTree(IList<FileNode> duplicateList)
         {
             var firstSkipped = false;
             ulong filesMoved = 0;
@@ -458,18 +492,18 @@ namespace Codevoid.Utility.FileDeduper
                     }
                 }
 
-                var treeSubPath = Path.Combine(Program.GetPathForDirectory(file.Parent), file.Name);
+                var destinationSubPath = Program.GetPathForDirectory(file.Parent);
+                var treeSubPath = Path.Combine(destinationSubPath, file.Name);
 
-                var sourceFilePath = this._root + treeSubPath;
+                var sourceFilePath = Path.Combine(this._root.FullName, treeSubPath);
                 if(!File.Exists(sourceFilePath))
                 {
                     Console.WriteLine("Skipping File, source no longer present: {0}", sourceFilePath);
                     continue;
                 }
 
-                var destinationFilePath = this._duplicateDestinationRoot + treeSubPath;
-                var destinationDirectory = Path.GetDirectoryName(destinationFilePath);
-                Directory.CreateDirectory(destinationDirectory);
+                var destinationFilePath = Path.Combine(this._duplicateDestinationRoot.FullName, treeSubPath);
+                this._duplicateDestinationRoot.CreateSubdirectory(destinationSubPath);
                 File.Move(sourceFilePath, destinationFilePath);
                 filesMoved++;
 
@@ -481,7 +515,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private void HashFileAndUpdateState(FileNode fileToHash)
         {
-            var filePath = this._root + Path.Combine(Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
+            var filePath = Path.Combine(this._root.FullName, Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
             Program.UpdateConsole("Hashing File: {0}", filePath);
 
             try
@@ -524,7 +558,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private void AddFileToLoadedState(string path)
         {
-            var workingPath = path.Remove(0, this._root.Length);
+            var workingPath = path.Remove(0, this._root.FullName.Length);
 
             if (String.IsNullOrEmpty(workingPath))
             {
@@ -532,8 +566,8 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
-            // Remove any leading \'s from the working path
-            if (workingPath[0] == '\\')
+            // Remove any leading path separators from the working path
+            if (workingPath[0] == Path.DirectorySeparatorChar)
             {
                 workingPath = workingPath.Remove(0, 1);
             }
@@ -546,17 +580,17 @@ namespace Codevoid.Utility.FileDeduper
             // the right parent directory            
             workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
 
-            // Trailing \'s will stop us from finding the path correctly
-            if (workingPath.EndsWith("\\"))
+            // Trailing path separators will stop us from finding the path correctly
+            if (workingPath.EndsWith(Path.DirectorySeparatorChar))
             {
-                workingPath = workingPath.TrimEnd(new char[] { '\\' });
+                workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
             }
 
             // Start our search at the root
             var current = this._rootNode;
 
             // Break out the path into the individual folder parts
-            var components = workingPath.Split('\\');
+            var components = workingPath.Split(Path.DirectorySeparatorChar);
             foreach (string component in components)
             {
                 if (String.IsNullOrEmpty(component))
@@ -584,12 +618,12 @@ namespace Codevoid.Utility.FileDeduper
 
         private bool FileExistsInLoadedState(string path)
         {
-            if (this._rootNode == null)
+            if (this._rootNode.Files.Count == 0 && this._rootNode.Directories.Count == 0)
             {
                 return false;
             }
 
-            var workingPath = path.Remove(0, this._root.Length);
+            var workingPath = path.Remove(0, this._root.FullName.Length);
 
             if (String.IsNullOrEmpty(workingPath))
             {
@@ -597,8 +631,8 @@ namespace Codevoid.Utility.FileDeduper
                 return true;
             }
 
-            // Remove any leading \'s from the working path
-            if (workingPath[0] == '\\')
+            // Remove any leading path separators from the working path
+            if (workingPath[0] == Path.DirectorySeparatorChar)
             {
                 workingPath = workingPath.Remove(0, 1);
             }
@@ -611,14 +645,14 @@ namespace Codevoid.Utility.FileDeduper
             // the right parent directory            
             workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
 
-            // Trailing \'s will stop us from finding the path correctly
-            if (workingPath.EndsWith("\\"))
+            // Trailing path separators will stop us from finding the path correctly
+            if (workingPath.EndsWith(Path.DirectorySeparatorChar))
             {
-                workingPath = workingPath.TrimEnd(new char[] { '\\' });
+                workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
             }
 
             var current = this._rootNode;
-            var components = workingPath.Split('\\');
+            var components = workingPath.Split(Path.DirectorySeparatorChar);
             foreach (string component in components)
             {
                 if (String.IsNullOrEmpty(component))
@@ -794,13 +828,13 @@ namespace Codevoid.Utility.FileDeduper
         {
             var components = new List<string>();
 
-            while (dn != null)
+            while (dn != null && !String.IsNullOrEmpty(dn.Name))
             {
                 components.Insert(0, dn.Name);
                 dn = dn.Parent;
             }
 
-            return String.Join("\\", components);
+            return String.Join(Path.DirectorySeparatorChar, components);
         }
 
         private static byte[] GetHashBytesFromString(string innerText)
