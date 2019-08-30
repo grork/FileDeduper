@@ -30,13 +30,15 @@ namespace Codevoid.Utility.FileDeduper
     {
         internal string Name { get; }
         internal DirectoryNode Parent { get; }
+        internal bool FromOriginalsTree { get; }
         private string _hashAsString;
         private byte[] _hash;
 
-        internal FileNode(string name, DirectoryNode parent)
+        internal FileNode(string name, DirectoryNode parent, bool sourcedFromOriginals)
         {
             this.Name = name;
             this.Parent = parent;
+            this.FromOriginalsTree = sourcedFromOriginals;
         }
 
         internal byte[] Hash
@@ -169,6 +171,7 @@ namespace Codevoid.Utility.FileDeduper
         private DirectoryInfo _duplicateDestinationRoot;
         private DirectoryInfo _duplicateCandidates;
         private DirectoryNode _rootNode = new DirectoryNode(String.Empty, null);
+        private bool _findDupesInOriginals = true;
         private bool _resume;
         private string _statePath = "state.xml";
         private bool _skipFileSystemCheck;
@@ -192,6 +195,8 @@ namespace Codevoid.Utility.FileDeduper
             {
                 return false;
             }
+
+            var findDupesInOriginals = false;
 
             for (var argIndex = 0; argIndex < args.Length; argIndex++)
             {
@@ -233,10 +238,19 @@ namespace Codevoid.Utility.FileDeduper
                         this._duplicateDestinationRoot = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
                         break;
 
+                    case "/fdio":
+                    case "/finddupesinoriginals":
+                        findDupesInOriginals = true;
+                        break;
 
                     default:
                         break;
                 }
+            }
+
+            if(findDupesInOriginals || (this._duplicateDestinationRoot == null))
+            {
+                this._findDupesInOriginals = true;
             }
 
             return true;
@@ -280,7 +294,7 @@ namespace Codevoid.Utility.FileDeduper
             }
         }
 
-        private ulong ProcessDirectoryTree(DirectoryInfo root)
+        private ulong ProcessDirectoryTree(DirectoryInfo root, bool sourcedFromOriginals = false)
         {
             ulong addedFileCount = 0;
 
@@ -318,7 +332,11 @@ namespace Codevoid.Utility.FileDeduper
                 // folders we might not have access to or might
                 // not be enumeratable
                 catch (UnauthorizedAccessException) { continue; }
-                catch (DirectoryNotFoundException) { continue; }
+                catch (DirectoryNotFoundException)
+                {
+                    Console.WriteLine("Unable to find folder '${0}'", directory.FullName);
+                    continue;
+                }
 
                 foreach (var childDir in childDirectories)
                 {
@@ -341,7 +359,7 @@ namespace Codevoid.Utility.FileDeduper
                     if (!this.FileExistsInLoadedState(childFile.FullName))
                     {
                         // File needs to added to the tree, so process it
-                        this.AddFileToLoadedState(childFile.FullName);
+                        this.AddFileToLoadedState(childFile.FullName, sourcedFromOriginals);
                         addedFileCount++;
                     }
                 }
@@ -376,7 +394,7 @@ namespace Codevoid.Utility.FileDeduper
             // Discover files from the file system
             if (!this._skipFileSystemCheck)
             {
-                addedFileCount += this.ProcessDirectoryTree(this._root);
+                addedFileCount += this.ProcessDirectoryTree(this._root, sourcedFromOriginals: true);
 
                 if(this._duplicateCandidates != null)
                 {
@@ -529,6 +547,11 @@ namespace Codevoid.Utility.FileDeduper
                     }
                 }
 
+                if(file.FromOriginalsTree && !this._findDupesInOriginals)
+                {
+                    continue;
+                }
+
                 var destinationSubPath = Program.GetPathForDirectory(file.Parent);
                 var treeSubPath = Path.Combine(destinationSubPath, file.Name);
 
@@ -593,7 +616,7 @@ namespace Codevoid.Utility.FileDeduper
             state.Save(this._statePath);
         }
 
-        private void AddFileToLoadedState(string path)
+        private void AddFileToLoadedState(string path, bool sourcedFromOriginals)
         {
             var workingPath = path.Remove(0, this._root.FullName.Length);
 
@@ -648,7 +671,7 @@ namespace Codevoid.Utility.FileDeduper
             // Since we're looking a file, we can assume that the
             // dictionary looking up will give us the conclusive
             // answer (since we found the folder path already)
-            var newFile = new FileNode(fileName, current);
+            var newFile = new FileNode(fileName, current, sourcedFromOriginals);
             current.Files[fileName] = newFile;
             this.AddFileToHashOrQueueForHashing(newFile);
         }
@@ -797,7 +820,14 @@ namespace Codevoid.Utility.FileDeduper
 
                     case "File":
                         var fileName = item.GetAttribute("Name");
-                        var newFile = new FileNode(fileName, parent);
+                        var sourcedFromOriginalsRaw = item.GetAttribute("FromOriginalsTree");
+                        var sourcedFromOriginalsTree = false;
+                        if(!Boolean.TryParse(sourcedFromOriginalsRaw, out sourcedFromOriginalsTree))
+                        {
+                            sourcedFromOriginalsTree = false;
+                        }
+
+                        var newFile = new FileNode(fileName, parent, sourcedFromOriginalsTree);
 
                         if (item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
                         {
