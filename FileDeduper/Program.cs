@@ -29,14 +29,16 @@ namespace Codevoid.Utility.FileDeduper
     class FileNode
     {
         internal string Name { get; }
+        internal string FullPath { get; }
         internal DirectoryNode Parent { get; }
         internal bool FromOriginalsTree { get; }
         private string _hashAsString;
         private byte[] _hash;
 
-        internal FileNode(string name, DirectoryNode parent, bool sourcedFromOriginals)
+        internal FileNode(string name, string fullPath, DirectoryNode parent, bool sourcedFromOriginals)
         {
             this.Name = name;
+            this.FullPath = fullPath;
             this.Parent = parent;
             this.FromOriginalsTree = sourcedFromOriginals;
         }
@@ -575,7 +577,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private void HashFileAndUpdateState(FileNode fileToHash)
         {
-            var filePath = Path.Combine(this._root.FullName, Program.GetPathForDirectory(fileToHash.Parent), fileToHash.Name);
+            var filePath = fileToHash.FullPath;
             Program.UpdateConsole("Hashing File: {0}", filePath);
 
             try
@@ -600,20 +602,7 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
-            this.AddFileToHashOrQueueForHashing(fileToHash);
-        }
-
-        private void SaveCurrentStateToDisk()
-        {
-            // Write the loaded data to disk
-            var state = new XmlDocument();
-            var rootOfState = state.CreateElement("State");
-            rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
-            state.AppendChild(rootOfState);
-
-            Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
-
-            state.Save(this._statePath);
+            this.AddFileToDuplicateListOrQueueForHashing(fileToHash);
         }
 
         private void AddFileToLoadedState(string path, bool sourcedFromOriginals)
@@ -671,9 +660,9 @@ namespace Codevoid.Utility.FileDeduper
             // Since we're looking a file, we can assume that the
             // dictionary looking up will give us the conclusive
             // answer (since we found the folder path already)
-            var newFile = new FileNode(fileName, current, sourcedFromOriginals);
+            var newFile = new FileNode(fileName, path, current, sourcedFromOriginals);
             current.Files[fileName] = newFile;
-            this.AddFileToHashOrQueueForHashing(newFile);
+            this.AddFileToDuplicateListOrQueueForHashing(newFile);
         }
 
         private bool FileExistsInLoadedState(string path)
@@ -735,7 +724,7 @@ namespace Codevoid.Utility.FileDeduper
             return current.Files.ContainsKey(fileName);
         }
 
-        private void AddFileToHashOrQueueForHashing(FileNode file)
+        private void AddFileToDuplicateListOrQueueForHashing(FileNode file)
         {
             if (file.Hash == null)
             {
@@ -754,6 +743,19 @@ namespace Codevoid.Utility.FileDeduper
         }
 
         #region State Saving
+        private void SaveCurrentStateToDisk()
+        {
+            // Write the loaded data to disk
+            var state = new XmlDocument();
+            var rootOfState = state.CreateElement("State");
+            rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
+            state.AppendChild(rootOfState);
+
+            Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
+
+            state.Save(this._statePath);
+        }
+
         private static void AddFilesIntoSavedState(ICollection<DirectoryNode> directories, ICollection<FileNode> files, XmlElement parent)
         {
             foreach (var dn in directories)
@@ -827,7 +829,8 @@ namespace Codevoid.Utility.FileDeduper
                             sourcedFromOriginalsTree = false;
                         }
 
-                        var newFile = new FileNode(fileName, parent, sourcedFromOriginalsTree);
+                        var fullPath = Path.Combine(this._root.FullName, Program.GetPathForDirectory(parent), fileName);
+                        var newFile = new FileNode(fileName, fullPath, parent, sourcedFromOriginalsTree);
 
                         if (item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
                         {
@@ -838,7 +841,7 @@ namespace Codevoid.Utility.FileDeduper
 
                         parent.Files[fileName] = newFile;
 
-                        this.AddFileToHashOrQueueForHashing(newFile);
+                        this.AddFileToDuplicateListOrQueueForHashing(newFile);
                         break;
                 }
             }
