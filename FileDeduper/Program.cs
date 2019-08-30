@@ -167,6 +167,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private DirectoryInfo _root;
         private DirectoryInfo _duplicateDestinationRoot;
+        private DirectoryInfo _duplicateCandidates;
         private DirectoryNode _rootNode = new DirectoryNode(String.Empty, null);
         private bool _resume;
         private string _statePath = "state.xml";
@@ -199,8 +200,16 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     case "/r":
                     case "/root":
+                    case "/o":
+                    case "/originals":
                         argIndex++;
                         this._root = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
+                        break;
+
+                    case "/dc":
+                    case "/duplicatecandidates":
+                        argIndex++;
+                        this._duplicateCandidates = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
                         break;
 
                     case "/res":
@@ -271,6 +280,76 @@ namespace Codevoid.Utility.FileDeduper
             }
         }
 
+        private ulong ProcessDirectoryTree(DirectoryInfo root)
+        {
+            ulong addedFileCount = 0;
+
+            // Validate the state against the file system.
+            var directories = new Queue<DirectoryInfo>();
+            directories.Enqueue(root);
+
+            while (directories.Count > 0)
+            {
+                lock (this)
+                {
+                    if (this._wasCancelled)
+                    {
+                        break;
+                    }
+                }
+
+                var directory = directories.Dequeue();
+
+                // If the directory is somewhere under our destination for moving
+                // then exclude that directory.
+                if (this._duplicateDestinationRoot != null && directory.FullName.StartsWith(this._duplicateDestinationRoot.FullName))
+                {
+                    continue;
+                }
+
+                // Scavange all the directories we need to look at
+                // and add them to the queue to be processed
+                IEnumerable<DirectoryInfo> childDirectories;
+                try
+                {
+                    childDirectories = directory.EnumerateDirectories();
+                }
+                // We need to catch these since there are many
+                // folders we might not have access to or might
+                // not be enumeratable
+                catch (UnauthorizedAccessException) { continue; }
+                catch (DirectoryNotFoundException) { continue; }
+
+                foreach (var childDir in childDirectories)
+                {
+                    directories.Enqueue(childDir);
+                }
+
+                IEnumerable<FileInfo> childFiles = directory.EnumerateFiles();
+
+                // Check the files to see if we already have information about them
+                foreach (var childFile in childFiles)
+                {
+                    lock (this)
+                    {
+                        if (this._wasCancelled)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (!this.FileExistsInLoadedState(childFile.FullName))
+                    {
+                        // File needs to added to the tree, so process it
+                        this.AddFileToLoadedState(childFile.FullName);
+                        addedFileCount++;
+                    }
+                }
+            }
+
+            return addedFileCount;
+        }
+
         private void Begin()
         {
             Program.PrintHeader();
@@ -297,72 +376,22 @@ namespace Codevoid.Utility.FileDeduper
             // Discover files from the file system
             if (!this._skipFileSystemCheck)
             {
-                // Validate the state against the file system.
-                var directories = new Queue<DirectoryInfo>();
-                directories.Enqueue(this._root);
+                addedFileCount += this.ProcessDirectoryTree(this._root);
 
-                while (directories.Count > 0)
+                if(this._duplicateCandidates != null)
                 {
-                    var directory = directories.Dequeue();
+                    addedFileCount += this.ProcessDirectoryTree(this._duplicateCandidates);
+                }
 
-                    // If the directory is somewhere under our destination for moving
-                    // then exclude that directory.
-                    if(this._duplicateDestinationRoot != null && directory.FullName.StartsWith(this._duplicateDestinationRoot.FullName))
-                    {
-                        continue;
-                    }
+                if (this._wasCancelled)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("Execution cancelled: Saving state for resuming later");
+                }
 
-                    // Scavange all the directories we need to look at
-                    // and add them to the queue to be processed
-                    IEnumerable<DirectoryInfo> childDirectories;
-                    try
-                    {
-                        childDirectories = directory.EnumerateDirectories();
-                    }
-                    // We need to catch these since there are many
-                    // folders we might not have access to or might
-                    // not be enumeratable
-                    catch (UnauthorizedAccessException) { continue; }
-                    catch (DirectoryNotFoundException) { continue; }
-
-                    foreach (var childDir in childDirectories)
-                    {
-                        directories.Enqueue(childDir);
-                    }
-
-                    IEnumerable<FileInfo> childFiles = directory.EnumerateFiles();
-
-                    // Check the files to see if we already have information about them
-                    foreach (var childFile in childFiles)
-                    {
-                        lock (this)
-                        {
-                            if (this._wasCancelled)
-                            {
-                                cancelled = true;
-                                break;
-                            }
-                        }
-
-                        if (!this.FileExistsInLoadedState(childFile.FullName))
-                        {
-                            // File needs to added to the tree, so process it
-                            this.AddFileToLoadedState(childFile.FullName);
-                            addedFileCount++;
-                        }
-                    }
-
-                    if (cancelled)
-                    {
-                        Console.WriteLine();
-                        Console.WriteLine("Execution cancelled: Saving state for resuming later");
-                        break;
-                    }
-
-                    if (addedFileCount > 0)
-                    {
-                        Program.UpdateConsole("New Files added: {0}", addedFileCount.ToString());
-                    }
+                if (addedFileCount > 0)
+                {
+                    Program.UpdateConsole("New Files added: {0}", addedFileCount.ToString());
                 }
 
                 Console.WriteLine();
@@ -820,11 +849,12 @@ namespace Codevoid.Utility.FileDeduper
 
             Console.WriteLine("Usage");
             Console.WriteLine("=====");
-            Console.WriteLine("dotnet FileDeduper.dll /root <path to find duplicates in>");
             Console.WriteLine();
-            Console.WriteLine("Required:");
-            Console.WriteLine("/r[oot]:   The root path where to start this search from.");
+            Console.WriteLine("Single folder usage:");
+            Console.WriteLine("dotnet FileDeuper /r[oot]:   The root path where to start this search from.");
             Console.WriteLine();
+            Console.WriteLine("Separate folder for duplicates usage:");
+            Console.WriteLine("dotnet FileDeduper.dll /originals <path for original files> /duplicatecandidates <path for where you think you've got duplicates>");
             Console.WriteLine("Optional:");
             Console.WriteLine("/res[ume]: Loads the state file, and continues from where it was. This will check the file system for new files");
             Console.WriteLine("/st[ate]:  File path for state to be saved. If not specified, saves 'State.xml' in the working directory");
