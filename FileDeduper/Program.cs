@@ -68,6 +68,19 @@ namespace Codevoid.Utility.FileDeduper
         }
     }
 
+    class Duplicates
+    {
+        internal FileNode FirstFile;
+        internal IList<FileNode> DuplicateFiles { get;} = new List<FileNode>();
+        internal bool HasDuplicates
+        {
+            get
+            {
+                return (this.DuplicateFiles.Count > 0);
+            }
+        }
+    }
+
     // Unabashedly lifted from StackOverflow:
     // http://stackoverflow.com/questions/7244699/gethashcode-on-byte-array/7244729#7244729
     public sealed class ArrayEqualityComparer<T> : IEqualityComparer<T[]>
@@ -160,7 +173,7 @@ namespace Codevoid.Utility.FileDeduper
         private bool _skipFileSystemCheck;
         private bool _wasCancelled;
         private readonly Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
-        private readonly IDictionary<byte[], IList<FileNode>> _hashToDuplicates = new Dictionary<byte[], IList<FileNode>>(new ArrayEqualityComparer<byte>());
+        private readonly IDictionary<byte[], Duplicates> _hashToDuplicates = new Dictionary<byte[], Duplicates>(new ArrayEqualityComparer<byte>());
         private HashAlgorithm _hasher;
         private readonly string _rootPathPrefix = String.Empty;
 
@@ -425,14 +438,16 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine();
             Console.WriteLine("Hashing {0} file(s) took {1}", filesHashed, DateTime.Now - start);
 
-            var filesWithDuplicates = new Queue<IList<FileNode>>();
+            var filesWithDuplicates = new Queue<Duplicates>();
+            var duplicateFiles = 0;
 
             // Calculate Duplicate Statistics
             foreach (var kvp in this._hashToDuplicates)
             {
-                if (kvp.Value.Count > 1)
+                if (kvp.Value.HasDuplicates)
                 {
                     filesWithDuplicates.Enqueue(kvp.Value);
+                    duplicateFiles += kvp.Value.DuplicateFiles.Count;
                 }
             }
 
@@ -443,6 +458,7 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             Console.WriteLine("Files with duplicates: {0}", filesWithDuplicates.Count);
+            Console.WriteLine("Total Duplicates: {0}", duplicateFiles);
 
             // If theres no destination directory, then we can't move anything
             if (this._duplicateDestinationRoot != null)
@@ -453,7 +469,7 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     var duplicateList = filesWithDuplicates.Dequeue();
 
-                    filesMoved += this.MoveDuplicatesToDestinationTree(duplicateList);
+                    filesMoved += this.MoveDuplicatesToDestinationTree(duplicateList.DuplicateFiles);
 
                     lock (this)
                     {
@@ -473,17 +489,9 @@ namespace Codevoid.Utility.FileDeduper
 
         private ulong MoveDuplicatesToDestinationTree(IList<FileNode> duplicateList)
         {
-            var firstSkipped = false;
             ulong filesMoved = 0;
             foreach(var file in duplicateList)
             {
-                // Leave the first file in place, since we want to keep an original
-                if(!firstSkipped)
-                {
-                    firstSkipped = true;
-                    continue;
-                }
-
                 lock(this)
                 {
                     if(this._wasCancelled)
@@ -683,12 +691,14 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
-            if (!this._hashToDuplicates.TryGetValue(file.Hash, out IList<FileNode> duplicates)) {
-                duplicates = new List<FileNode>();
+            if (!this._hashToDuplicates.TryGetValue(file.Hash, out Duplicates duplicates))
+            {
+                duplicates = new Duplicates() { FirstFile = file };
                 this._hashToDuplicates.Add(file.Hash, duplicates);
+                return;
             }
 
-            duplicates.Add(file);
+            duplicates.DuplicateFiles.Add(file);
         }
 
         #region State Saving
