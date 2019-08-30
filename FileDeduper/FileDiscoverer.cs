@@ -4,6 +4,68 @@ using System.IO;
 
 namespace Codevoid.Utility.FileDeduper
 {
+    class DirectoryNode
+    {
+        internal DirectoryNode(string name, DirectoryNode parent)
+        {
+            this.Name = name;
+            this.Files = new Dictionary<string, FileNode>();
+            this.Directories = new Dictionary<string, DirectoryNode>();
+            this.Parent = parent;
+        }
+
+        internal string Name { get; }
+        internal IDictionary<string, FileNode> Files { get; }
+        internal IDictionary<string, DirectoryNode> Directories { get; }
+        internal DirectoryNode Parent { get; }
+    }
+
+    class FileNode
+    {
+        internal string Name { get; }
+        internal string FullPath { get; }
+        internal DirectoryNode Parent { get; }
+        internal bool FromOriginalsTree { get; }
+        private string _hashAsString;
+        private byte[] _hash;
+
+        internal FileNode(string name, string fullPath, DirectoryNode parent, bool sourcedFromOriginals)
+        {
+            this.Name = name;
+            this.FullPath = fullPath;
+            this.Parent = parent;
+            this.FromOriginalsTree = sourcedFromOriginals;
+        }
+
+        internal byte[] Hash
+        {
+            get { return this._hash; }
+            set
+            {
+                this._hash = value;
+                this._hashAsString = null;
+            }
+        }
+
+        internal string HashAsString
+        {
+            get
+            {
+                if (this._hash == null)
+                {
+                    return null;
+                }
+
+                if (this._hashAsString == null)
+                {
+                    this._hashAsString = BitConverter.ToString(this._hash).Replace("-", "");
+                }
+
+                return this._hashAsString;
+            }
+        }
+    }
+
     class FileDiscoverer
     {
         private DirectoryInfo _root;
