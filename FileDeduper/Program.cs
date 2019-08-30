@@ -140,6 +140,222 @@ namespace Codevoid.Utility.FileDeduper
         }
     }
 
+    class FileDiscoverer
+    {
+        private DirectoryInfo _root;
+        private DirectoryNode _rootNode;
+        private DirectoryInfo _duplicatesDestinationRoot;
+        private bool _sourcedFromOriginals = false;
+        
+        internal bool Cancelled = false;
+        internal ulong DiscoveredFileCount { get; private set; }
+
+        internal event EventHandler<FileNode> FileDiscovered;
+
+        internal FileDiscoverer(DirectoryInfo root, DirectoryInfo duplicatesDestinationRoot, bool sourcedFromOriginals = false)
+        {
+            this._root = root;
+            this._duplicatesDestinationRoot = duplicatesDestinationRoot;
+            this._sourcedFromOriginals = sourcedFromOriginals;
+            this._rootNode = new DirectoryNode(String.Empty, null);
+        }
+
+        internal void DiscoverFiles()
+        {
+            // Validate the state against the file system.
+            var directories = new Queue<DirectoryInfo>();
+            directories.Enqueue(this._root);
+
+            while (directories.Count > 0)
+            {
+                lock (this)
+                {
+                    if (this.Cancelled)
+                    {
+                        break;
+                    }
+                }
+
+                var directory = directories.Dequeue();
+
+                // If the directory is somewhere under our destination for moving
+                // then exclude that directory.
+                if (this._duplicatesDestinationRoot != null && directory.FullName.StartsWith(this._duplicatesDestinationRoot.FullName))
+                {
+                    continue;
+                }
+
+                // Scavange all the directories we need to look at
+                // and add them to the queue to be processed
+                IEnumerable<DirectoryInfo> childDirectories;
+                try
+                {
+                    childDirectories = directory.EnumerateDirectories();
+                }
+                // We need to catch these since there are many
+                // folders we might not have access to or might
+                // not be enumeratable
+                catch (UnauthorizedAccessException) { continue; }
+                catch (DirectoryNotFoundException)
+                {
+                    Console.WriteLine("Unable to find folder '${0}'", directory.FullName);
+                    continue;
+                }
+
+                foreach (var childDir in childDirectories)
+                {
+                    directories.Enqueue(childDir);
+                }
+
+                IEnumerable<FileInfo> childFiles = directory.EnumerateFiles();
+
+                // Check the files to see if we already have information about them
+                foreach (var childFile in childFiles)
+                {
+                    lock (this)
+                    {
+                        if (this.Cancelled)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (!this.FileExistsInLoadedState(childFile.FullName))
+                    {
+                        // File needs to added to the tree, so process it
+                        this.AddFileToLoadedState(childFile.FullName);
+                        this.DiscoveredFileCount++;
+                    }
+                }
+            }
+        }
+
+        private bool FileExistsInLoadedState(string path)
+        {
+            if (this._rootNode.Files.Count == 0 && this._rootNode.Directories.Count == 0)
+            {
+                return false;
+            }
+
+            var workingPath = path.Remove(0, this._root.FullName.Length);
+
+            if (String.IsNullOrEmpty(workingPath))
+            {
+                // This is the root node, by definition
+                return true;
+            }
+
+            // Remove any leading path separators from the working path
+            if (workingPath[0] == Path.DirectorySeparatorChar)
+            {
+                workingPath = workingPath.Remove(0, 1);
+            }
+
+            // This will include the extension, if there is one
+            var fileName = Path.GetFileName(path);
+
+            // This is a file, so we need to strip out the filename
+            // from the path we're looking up to ensure that we find
+            // the right parent directory            
+            workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
+
+            // Trailing path separators will stop us from finding the path correctly
+            if (workingPath.EndsWith(Path.DirectorySeparatorChar))
+            {
+                workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
+            }
+
+            var current = this._rootNode;
+            var components = workingPath.Split(Path.DirectorySeparatorChar);
+            foreach (string component in components)
+            {
+                if (String.IsNullOrEmpty(component))
+                {
+                    continue;
+                }
+
+                // If any part of the path isn't found in the
+                // dictionaries, then it's not going to be there (and
+                // by definition, nor will any files)
+                if (!current.Directories.TryGetValue(component, out current))
+                {
+                    return false;
+                }
+            }
+
+            // Since we're looking a file, we can assume that the
+            // dictionary looking up will give us the conclusive
+            // answer (since we found the folder path already)
+            return current.Files.ContainsKey(fileName);
+        }
+
+        private void AddFileToLoadedState(string path)
+        {
+            var workingPath = path.Remove(0, this._root.FullName.Length);
+
+            if (String.IsNullOrEmpty(workingPath))
+            {
+                // This can happen for the root path
+                return;
+            }
+
+            // Remove any leading path separators from the working path
+            if (workingPath[0] == Path.DirectorySeparatorChar)
+            {
+                workingPath = workingPath.Remove(0, 1);
+            }
+
+            // This will include the extension, if there is one
+            string fileName = Path.GetFileName(path);
+
+            // This is a file, so we need to strip out the filename
+            // from the path we're looking up to ensure that we find
+            // the right parent directory            
+            workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
+
+            // Trailing path separators will stop us from finding the path correctly
+            if (workingPath.EndsWith(Path.DirectorySeparatorChar))
+            {
+                workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
+            }
+
+            // Start our search at the root
+            var current = this._rootNode;
+
+            // Break out the path into the individual folder parts
+            var components = workingPath.Split(Path.DirectorySeparatorChar);
+            foreach (string component in components)
+            {
+                if (String.IsNullOrEmpty(component))
+                {
+                    continue;
+                }
+
+                // If any part of the path isn't found in the
+                // dictionaries, we need to fill in the missing parts
+                if (!current.Directories.TryGetValue(component, out DirectoryNode directory)) {
+                    directory = new DirectoryNode(component, current);
+                    current.Directories[component] = directory;
+                }
+
+                current = directory;
+            }
+
+            // Since we're looking a file, we can assume that the
+            // dictionary looking up will give us the conclusive
+            // answer (since we found the folder path already)
+            var newFile = new FileNode(fileName, path, current, this._sourcedFromOriginals);
+            current.Files[fileName] = newFile;
+            
+            EventHandler<FileNode> handler = this.FileDiscovered;
+            if(handler != null)
+            {
+                handler(this, newFile);
+            }
+        }
+    }
+
+
     class Program
     {
         /// <summary>
@@ -296,80 +512,6 @@ namespace Codevoid.Utility.FileDeduper
             }
         }
 
-        private ulong ProcessDirectoryTree(DirectoryInfo root, bool sourcedFromOriginals = false)
-        {
-            ulong addedFileCount = 0;
-
-            // Validate the state against the file system.
-            var directories = new Queue<DirectoryInfo>();
-            directories.Enqueue(root);
-
-            while (directories.Count > 0)
-            {
-                lock (this)
-                {
-                    if (this._wasCancelled)
-                    {
-                        break;
-                    }
-                }
-
-                var directory = directories.Dequeue();
-
-                // If the directory is somewhere under our destination for moving
-                // then exclude that directory.
-                if (this._duplicateDestinationRoot != null && directory.FullName.StartsWith(this._duplicateDestinationRoot.FullName))
-                {
-                    continue;
-                }
-
-                // Scavange all the directories we need to look at
-                // and add them to the queue to be processed
-                IEnumerable<DirectoryInfo> childDirectories;
-                try
-                {
-                    childDirectories = directory.EnumerateDirectories();
-                }
-                // We need to catch these since there are many
-                // folders we might not have access to or might
-                // not be enumeratable
-                catch (UnauthorizedAccessException) { continue; }
-                catch (DirectoryNotFoundException)
-                {
-                    Console.WriteLine("Unable to find folder '${0}'", directory.FullName);
-                    continue;
-                }
-
-                foreach (var childDir in childDirectories)
-                {
-                    directories.Enqueue(childDir);
-                }
-
-                IEnumerable<FileInfo> childFiles = directory.EnumerateFiles();
-
-                // Check the files to see if we already have information about them
-                foreach (var childFile in childFiles)
-                {
-                    lock (this)
-                    {
-                        if (this._wasCancelled)
-                        {
-                            break;
-                        }
-                    }
-
-                    if (!this.FileExistsInLoadedState(childFile.FullName))
-                    {
-                        // File needs to added to the tree, so process it
-                        this.AddFileToLoadedState(childFile.FullName, sourcedFromOriginals);
-                        addedFileCount++;
-                    }
-                }
-            }
-
-            return addedFileCount;
-        }
-
         private void Begin()
         {
             Program.PrintHeader();
@@ -396,11 +538,21 @@ namespace Codevoid.Utility.FileDeduper
             // Discover files from the file system
             if (!this._skipFileSystemCheck)
             {
-                addedFileCount += this.ProcessDirectoryTree(this._root, sourcedFromOriginals: true);
+                var originalsDiscoverer = new FileDiscoverer(root: this._root,
+                                        duplicatesDestinationRoot: this._duplicateDestinationRoot,
+                                             sourcedFromOriginals: true);
+                originalsDiscoverer.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
+                originalsDiscoverer.DiscoverFiles();
+
+                addedFileCount += originalsDiscoverer.DiscoveredFileCount;
 
                 if(this._duplicateCandidates != null)
                 {
-                    addedFileCount += this.ProcessDirectoryTree(this._duplicateCandidates);
+                    var duplicatesDiscoverer = new FileDiscoverer(root: this._duplicateCandidates,
+                                             duplicatesDestinationRoot: this._duplicateDestinationRoot);
+                    duplicatesDiscoverer.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
+                    duplicatesDiscoverer.DiscoverFiles();
+                    addedFileCount += duplicatesDiscoverer.DiscoveredFileCount;
                 }
 
                 if (this._wasCancelled)
@@ -602,129 +754,10 @@ namespace Codevoid.Utility.FileDeduper
                 return;
             }
 
-            this.AddFileToDuplicateListOrQueueForHashing(fileToHash);
+            this.AddFileToDuplicateListOrQueueForHashing(this, fileToHash);
         }
 
-        private void AddFileToLoadedState(string path, bool sourcedFromOriginals)
-        {
-            var workingPath = path.Remove(0, this._root.FullName.Length);
-
-            if (String.IsNullOrEmpty(workingPath))
-            {
-                // This can happen for the root path
-                return;
-            }
-
-            // Remove any leading path separators from the working path
-            if (workingPath[0] == Path.DirectorySeparatorChar)
-            {
-                workingPath = workingPath.Remove(0, 1);
-            }
-
-            // This will include the extension, if there is one
-            string fileName = Path.GetFileName(path);
-
-            // This is a file, so we need to strip out the filename
-            // from the path we're looking up to ensure that we find
-            // the right parent directory            
-            workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
-
-            // Trailing path separators will stop us from finding the path correctly
-            if (workingPath.EndsWith(Path.DirectorySeparatorChar))
-            {
-                workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
-            }
-
-            // Start our search at the root
-            var current = this._rootNode;
-
-            // Break out the path into the individual folder parts
-            var components = workingPath.Split(Path.DirectorySeparatorChar);
-            foreach (string component in components)
-            {
-                if (String.IsNullOrEmpty(component))
-                {
-                    continue;
-                }
-
-                // If any part of the path isn't found in the
-                // dictionaries, we need to fill in the missing parts
-                if (!current.Directories.TryGetValue(component, out DirectoryNode directory)) {
-                    directory = new DirectoryNode(component, current);
-                    current.Directories[component] = directory;
-                }
-
-                current = directory;
-            }
-
-            // Since we're looking a file, we can assume that the
-            // dictionary looking up will give us the conclusive
-            // answer (since we found the folder path already)
-            var newFile = new FileNode(fileName, path, current, sourcedFromOriginals);
-            current.Files[fileName] = newFile;
-            this.AddFileToDuplicateListOrQueueForHashing(newFile);
-        }
-
-        private bool FileExistsInLoadedState(string path)
-        {
-            if (this._rootNode.Files.Count == 0 && this._rootNode.Directories.Count == 0)
-            {
-                return false;
-            }
-
-            var workingPath = path.Remove(0, this._root.FullName.Length);
-
-            if (String.IsNullOrEmpty(workingPath))
-            {
-                // This is the root node, by definition
-                return true;
-            }
-
-            // Remove any leading path separators from the working path
-            if (workingPath[0] == Path.DirectorySeparatorChar)
-            {
-                workingPath = workingPath.Remove(0, 1);
-            }
-
-            // This will include the extension, if there is one
-            var fileName = Path.GetFileName(path);
-
-            // This is a file, so we need to strip out the filename
-            // from the path we're looking up to ensure that we find
-            // the right parent directory            
-            workingPath = workingPath.Remove(workingPath.Length - fileName.Length, fileName.Length);
-
-            // Trailing path separators will stop us from finding the path correctly
-            if (workingPath.EndsWith(Path.DirectorySeparatorChar))
-            {
-                workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
-            }
-
-            var current = this._rootNode;
-            var components = workingPath.Split(Path.DirectorySeparatorChar);
-            foreach (string component in components)
-            {
-                if (String.IsNullOrEmpty(component))
-                {
-                    continue;
-                }
-
-                // If any part of the path isn't found in the
-                // dictionaries, then it's not going to be there (and
-                // by definition, nor will any files)
-                if (!current.Directories.TryGetValue(component, out current))
-                {
-                    return false;
-                }
-            }
-
-            // Since we're looking a file, we can assume that the
-            // dictionary looking up will give us the conclusive
-            // answer (since we found the folder path already)
-            return current.Files.ContainsKey(fileName);
-        }
-
-        private void AddFileToDuplicateListOrQueueForHashing(FileNode file)
+        private void AddFileToDuplicateListOrQueueForHashing(object _, FileNode file)
         {
             if (file.Hash == null)
             {
@@ -841,7 +874,7 @@ namespace Codevoid.Utility.FileDeduper
 
                         parent.Files[fileName] = newFile;
 
-                        this.AddFileToDuplicateListOrQueueForHashing(newFile);
+                        this.AddFileToDuplicateListOrQueueForHashing(this, newFile);
                         break;
                 }
             }
