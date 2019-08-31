@@ -39,13 +39,15 @@ The tool will print it's usage on the command line if no parameters are passed.
 
 For refrence:
 
-| Parameter             | Description                                                                                     |
-|-----------------------|-------------------------------------------------------------------------------------------------|
-| `/r[oot]`             | The root path where to start this search from.                                                  |
-| `/res[ume]`           | Loads the state file, and continues from where it had been stopped. This will check the file system for new files, and continue any hashing for files where a hash hasn't been generated yet. |
-| `/st[ate]`            | File path for state to be saved. If not specfied, saves to `State.xml` in the working directory |
-| `/skip:`              | Skips checking the file system and only uses saved tate to determine work                       |
-| `/d[estinationroot]:` | Full path to a destination for any duplicates that are found. If not supplied, no duplicates will be moved |
+| Parameter                    | Description                                                                                     |
+|------------------------------|-------------------------------------------------------------------------------------------------|
+| `/r[oot]`                    | The root path where to start this search from.                                                  |
+| `/res[ume]`                  | Loads the state file, and continues from where it had been stopped. This will check the file system for new files, and continue any hashing for files where a hash hasn't been generated yet. |
+| `/st[ate]`                   | File path for state to be saved. If not specfied, saves to `State.xml` in the working directory |
+| `/skip:`                     | Skips checking the file system and only uses saved tate to determine work                       |
+| `/d[estinationroot]:`        | Full path to a destination for any duplicates that are found. If not supplied, no duplicates will be moved |
+| `/duplicatecandidates:`      | Full path to a folder to find duplicates. When in this mode, duplicates in the root are left alone |
+| `/findduplicatesinoriginals` | When used with a duplicates folder, this switch will find duplicates in the root folder similar to single-fold mode |
 
 Example Usage:
 
@@ -69,3 +71,10 @@ Deduplication only happens if the `/destinationroot` parameter is supplied. If i
 
 It should be noted that if you put the destination on a separate physical drive, the duration of the move phase will drastically increase since it has to physically move the files, rather than just update the file system in place.
 
+## Separate folder for possible duplicates ##
+Sometimes, you've got two folder hierarchies that you know are very similar, but there are some files that _aren't_ duplicates.
+In single folder mode, this leaves a bit of quandry -- you dont what to have to find all the files that are the same, you want to find the extras.
+
+Given the principle of not deleting things, theres a mode that will leave the original folder intact, and only remove the duplicates from the folder you think has extras in it.
+
+To achive this you can use the `/duplicatecandidates`, which will be the folder searched for duplicates.
