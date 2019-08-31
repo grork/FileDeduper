@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 
 namespace Codevoid.Utility.FileDeduper
 {
@@ -71,14 +72,17 @@ namespace Codevoid.Utility.FileDeduper
         private DirectoryInfo _root;
         private DirectoryInfo _duplicatesDestinationRoot;
         private bool _sourcedFromOriginals = false;
+        private CancellationToken _cancellationToken;
         
         internal DirectoryNode RootNode { get; private set; }
-        internal bool Cancelled = false;
         internal ulong DiscoveredFileCount { get; private set; }
 
         internal event EventHandler<FileNode> FileDiscovered;
 
-        internal FileDiscoverer(DirectoryInfo root, DirectoryInfo duplicatesDestinationRoot, bool sourcedFromOriginals = false)
+        internal FileDiscoverer(DirectoryInfo root,
+                                DirectoryInfo duplicatesDestinationRoot,
+                            CancellationToken cancellationToken,
+                                         bool sourcedFromOriginals = false)
         {
             this._root = root;
             this._duplicatesDestinationRoot = duplicatesDestinationRoot;
@@ -96,7 +100,7 @@ namespace Codevoid.Utility.FileDeduper
             {
                 lock (this)
                 {
-                    if (this.Cancelled)
+                    if (this._cancellationToken.IsCancellationRequested)
                     {
                         break;
                     }
@@ -140,7 +144,7 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     lock (this)
                     {
-                        if (this.Cancelled)
+                        if (this._cancellationToken.IsCancellationRequested)
                         {
                             break;
                         }

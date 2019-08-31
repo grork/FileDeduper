@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
+using System.Threading;
 using System.Xml;
 
 namespace Codevoid.Utility.FileDeduper
@@ -116,11 +117,11 @@ namespace Codevoid.Utility.FileDeduper
         private bool _resume;
         private string _statePath = "state.xml";
         private bool _skipFileSystemCheck;
-        private bool _wasCancelled;
         private readonly Queue<FileNode> _itemsRequiringHashing = new Queue<FileNode>(5000);
         private readonly IDictionary<byte[], Duplicates> _hashToDuplicates = new Dictionary<byte[], Duplicates>(new ArrayEqualityComparer<byte>());
         private HashAlgorithm _hasher;
         private readonly string _rootPathPrefix = String.Empty;
+        private readonly CancellationTokenSource _cancellationSource = new CancellationTokenSource();
 
         private Program()
         {
@@ -230,7 +231,7 @@ namespace Codevoid.Utility.FileDeduper
         {
             lock (this)
             {
-                this._wasCancelled = true;
+                this._cancellationSource.Cancel();
                 e.Cancel = true;
             }
         }
@@ -263,7 +264,8 @@ namespace Codevoid.Utility.FileDeduper
             {
                 var originalsDiscoverer = new FileDiscoverer(root: this._root,
                                         duplicatesDestinationRoot: this._duplicateDestinationRoot,
-                                             sourcedFromOriginals: true);
+                                             sourcedFromOriginals: true,
+                                             cancellationToken: this._cancellationSource.Token);
                 originalsDiscoverer.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
                 originalsDiscoverer.DiscoverFiles();
 
@@ -273,14 +275,15 @@ namespace Codevoid.Utility.FileDeduper
                 if(this._duplicateCandidatesRoot != null)
                 {
                     var duplicatesDiscoverer = new FileDiscoverer(root: this._duplicateCandidatesRoot,
-                                             duplicatesDestinationRoot: this._duplicateDestinationRoot);
+                                             duplicatesDestinationRoot: this._duplicateDestinationRoot,
+                                             cancellationToken: this._cancellationSource.Token);
                     duplicatesDiscoverer.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
                     duplicatesDiscoverer.DiscoverFiles();
                     addedFileCount += duplicatesDiscoverer.DiscoveredFileCount;
                     this._duplicateCandidatesNode = duplicatesDiscoverer.RootNode;
                 }
 
-                if (this._wasCancelled)
+                if (this._cancellationSource.IsCancellationRequested)
                 {
                     Console.WriteLine();
                     Console.WriteLine("Execution cancelled: Saving state for resuming later");
@@ -337,7 +340,7 @@ namespace Codevoid.Utility.FileDeduper
 
                     lock (this)
                     {
-                        if (this._wasCancelled)
+                        if (this._cancellationSource.IsCancellationRequested)
                         {
                             Console.WriteLine();
                             cancelled = true;
@@ -399,7 +402,7 @@ namespace Codevoid.Utility.FileDeduper
 
                     lock (this)
                     {
-                        if (this._wasCancelled)
+                        if (this._cancellationSource.IsCancellationRequested)
                         {
                             Console.WriteLine();
                             cancelled = true;
@@ -420,7 +423,7 @@ namespace Codevoid.Utility.FileDeduper
             {
                 lock(this)
                 {
-                    if(this._wasCancelled)
+                    if(this._cancellationSource.IsCancellationRequested)
                     {
                         return filesMoved;
                     }
