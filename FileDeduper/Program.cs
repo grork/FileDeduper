@@ -109,8 +109,9 @@ namespace Codevoid.Utility.FileDeduper
 
         private DirectoryInfo _root;
         private DirectoryInfo _duplicateDestinationRoot;
-        private DirectoryInfo _duplicateCandidates;
-        private DirectoryNode _rootNode = new DirectoryNode(String.Empty, null);
+        private DirectoryInfo _duplicateCandidatesRoot;
+        private DirectoryNode _originalsNode = new DirectoryNode(String.Empty, null);
+        private DirectoryNode _duplicateCandidatesNode = new DirectoryNode(String.Empty, null);
         private bool _findDupesInOriginals = true;
         private bool _resume;
         private string _statePath = "state.xml";
@@ -154,7 +155,7 @@ namespace Codevoid.Utility.FileDeduper
                     case "/dc":
                     case "/duplicatecandidates":
                         argIndex++;
-                        this._duplicateCandidates = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
+                        this._duplicateCandidatesRoot = new DirectoryInfo(this._rootPathPrefix + args[argIndex]);
                         break;
 
                     case "/res":
@@ -267,14 +268,16 @@ namespace Codevoid.Utility.FileDeduper
                 originalsDiscoverer.DiscoverFiles();
 
                 addedFileCount += originalsDiscoverer.DiscoveredFileCount;
+                this._originalsNode = originalsDiscoverer.RootNode;
 
-                if(this._duplicateCandidates != null)
+                if(this._duplicateCandidatesRoot != null)
                 {
-                    var duplicatesDiscoverer = new FileDiscoverer(root: this._duplicateCandidates,
+                    var duplicatesDiscoverer = new FileDiscoverer(root: this._duplicateCandidatesRoot,
                                              duplicatesDestinationRoot: this._duplicateDestinationRoot);
                     duplicatesDiscoverer.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
                     duplicatesDiscoverer.DiscoverFiles();
                     addedFileCount += duplicatesDiscoverer.DiscoveredFileCount;
+                    this._duplicateCandidatesNode = duplicatesDiscoverer.RootNode;
                 }
 
                 if (this._wasCancelled)
@@ -502,11 +505,15 @@ namespace Codevoid.Utility.FileDeduper
         {
             // Write the loaded data to disk
             var state = new XmlDocument();
-            var rootOfState = state.CreateElement("State");
+            var rootOfState = state.AppendChild(state.CreateElement("State")) as XmlElement;
             rootOfState.SetAttribute("GeneratedAt", DateTime.Now.ToString());
-            state.AppendChild(rootOfState);
 
-            Program.AddFilesIntoSavedState(this._rootNode.Directories.Values, this._rootNode.Files.Values, rootOfState);
+            var originalsState = rootOfState.AppendChild(state.CreateElement("Originals")) as XmlElement;
+            Program.AddFilesIntoSavedState(this._originalsNode.Directories.Values, this._originalsNode.Files.Values, originalsState);
+
+            var duplicatesStates = rootOfState.AppendChild(state.CreateElement("DuplicateCandidates")) as XmlElement;
+            Program.AddFilesIntoSavedState(this._duplicateCandidatesNode.Directories.Values,
+                                           this._duplicateCandidatesNode.Files.Values, duplicatesStates);
 
             state.Save(this._statePath);
         }
@@ -551,17 +558,31 @@ namespace Codevoid.Utility.FileDeduper
         private void LoadState(string path)
         {
             var state = new XmlDocument();
-            state.Load(path);
+            try
+            {
+                state.Load(path);
+            }
+            catch
+            {
+                Console.WriteLine("Invalid State file - restarting from clean state");
+                return;
+            }
 
             var rootOfState = state.DocumentElement as XmlElement;
 
-            var root = new DirectoryNode(String.Empty, null);
-            this.ProcessNodes(root, rootOfState.ChildNodes);
+            var originalsNodes = rootOfState.GetElementsByTagName("Originals");
+            var originals = new DirectoryNode(String.Empty, null);
+            this.ProcessNodes(originals, originalsNodes[0].ChildNodes, sourcedFromOriginalsTree: true);
 
-            this._rootNode = root;
+            var duplicateNodes = rootOfState.GetElementsByTagName("DuplicateCandidates");
+            var duplicateCandidates = new DirectoryNode(String.Empty, null);
+            this.ProcessNodes(duplicateCandidates, duplicateNodes[0].ChildNodes);
+
+            this._originalsNode = originals;
+            this._duplicateCandidatesNode = duplicateCandidates;
         }
 
-        private void ProcessNodes(DirectoryNode parent, XmlNodeList children)
+        private void ProcessNodes(DirectoryNode parent, XmlNodeList children, bool sourcedFromOriginalsTree = false)
         {
             foreach (XmlNode n in children)
             {
@@ -571,18 +592,12 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     case "Folder":
                         var newFolder = new DirectoryNode(item.GetAttribute("Name"), parent);
-                        this.ProcessNodes(newFolder, item.ChildNodes);
+                        this.ProcessNodes(newFolder, item.ChildNodes, sourcedFromOriginalsTree);
                         parent.Directories[newFolder.Name] = newFolder;
                         break;
 
                     case "File":
                         var fileName = item.GetAttribute("Name");
-                        var sourcedFromOriginalsRaw = item.GetAttribute("FromOriginalsTree");
-                        var sourcedFromOriginalsTree = false;
-                        if(!Boolean.TryParse(sourcedFromOriginalsRaw, out sourcedFromOriginalsTree))
-                        {
-                            sourcedFromOriginalsTree = false;
-                        }
 
                         var fullPath = Path.Combine(this._root.FullName, Program.GetPathForDirectory(parent), fileName);
                         var newFile = new FileNode(fileName, fullPath, parent, sourcedFromOriginalsTree);

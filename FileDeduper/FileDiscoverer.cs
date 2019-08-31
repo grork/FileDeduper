@@ -69,10 +69,10 @@ namespace Codevoid.Utility.FileDeduper
     class FileDiscoverer
     {
         private DirectoryInfo _root;
-        private DirectoryNode _rootNode;
         private DirectoryInfo _duplicatesDestinationRoot;
         private bool _sourcedFromOriginals = false;
         
+        internal DirectoryNode RootNode { get; private set; }
         internal bool Cancelled = false;
         internal ulong DiscoveredFileCount { get; private set; }
 
@@ -83,7 +83,7 @@ namespace Codevoid.Utility.FileDeduper
             this._root = root;
             this._duplicatesDestinationRoot = duplicatesDestinationRoot;
             this._sourcedFromOriginals = sourcedFromOriginals;
-            this._rootNode = new DirectoryNode(String.Empty, null);
+            this.RootNode = new DirectoryNode(String.Empty, null);
         }
 
         internal void DiscoverFiles()
@@ -158,7 +158,7 @@ namespace Codevoid.Utility.FileDeduper
 
         private bool FileExistsInLoadedState(string path)
         {
-            if (this._rootNode.Files.Count == 0 && this._rootNode.Directories.Count == 0)
+            if (this.RootNode.Files.Count == 0 && this.RootNode.Directories.Count == 0)
             {
                 return false;
             }
@@ -191,7 +191,7 @@ namespace Codevoid.Utility.FileDeduper
                 workingPath = workingPath.TrimEnd(new char[] { Path.DirectorySeparatorChar });
             }
 
-            var current = this._rootNode;
+            var current = this.RootNode;
             var components = workingPath.Split(Path.DirectorySeparatorChar);
             foreach (string component in components)
             {
@@ -246,7 +246,7 @@ namespace Codevoid.Utility.FileDeduper
             }
 
             // Start our search at the root
-            var current = this._rootNode;
+            var current = this.RootNode;
 
             // Break out the path into the individual folder parts
             var components = workingPath.Split(Path.DirectorySeparatorChar);
