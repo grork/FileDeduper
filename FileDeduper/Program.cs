@@ -125,6 +125,8 @@ namespace Codevoid.Utility.FileDeduper
 
         private Program()
         {
+            // To support extra long (> MAX_PATH) paths on windows, paths need
+            // to be prefixed with the NT Object format prefix.
             if(RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 this._rootPathPrefix = @"\\?\";
@@ -666,7 +668,7 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine("/st[ate]:  File path for state to be saved. If not specified, saves 'State.xml' in the working directory");
             Console.WriteLine("/skip:     Skips checking the file system and only uses the saved state to determine work");
             Console.WriteLine("/d[estinationroot]: Full path to a directory root to exclude");
-
+            Console.WriteLine("/findduplicatesinoriginals [fdio]: When in duplicates mode, search originals for duplicates in that folder too");
         }
 
         private static void PrintHeader()

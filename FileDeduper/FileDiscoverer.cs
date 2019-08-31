@@ -104,6 +104,10 @@ namespace Codevoid.Utility.FileDeduper
         internal DirectoryNode RootNode { get; private set; }
         internal ulong DiscoveredFileCount { get; private set; }
 
+        /// <summary>
+        /// Raised when a file has been found, and might need to be added
+        /// to a queue for further processing.
+        /// </summary>
         internal event EventHandler<FileNode> FileDiscovered;
 
         internal FileDiscoverer(DirectoryInfo root,
