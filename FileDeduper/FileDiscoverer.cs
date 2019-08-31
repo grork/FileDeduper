@@ -5,6 +5,11 @@ using System.Threading;
 
 namespace Codevoid.Utility.FileDeduper
 {
+    /// <summary>
+    /// Holds information about particular directory in the filesystem.
+    /// This is to help us store things by each folder, in some semblance of
+    /// order, rather than a giant bag-o-crap
+    /// </summary>
     class DirectoryNode
     {
         internal DirectoryNode(string name, DirectoryNode parent)
@@ -15,17 +20,39 @@ namespace Codevoid.Utility.FileDeduper
             this.Parent = parent;
         }
 
+        /// <summary>
+        /// The folder name itself, not it's parent path etc
+        /// </summary>
         internal string Name { get; }
         internal IDictionary<string, FileNode> Files { get; }
         internal IDictionary<string, DirectoryNode> Directories { get; }
         internal DirectoryNode Parent { get; }
     }
 
+    /// <summary>
+    /// A single file that we have seen, including where it's from, and a hash
+    /// if one has been generated. Does *not* factor in any duplicate information
+    /// </summary>  
     class FileNode
     {
+        /// <summary>
+        /// The Name of the file, including it's extension. Not the path of it's
+        /// containing folder.
+        /// </summary>
         internal string Name { get; }
+
+        /// <summary>
+        /// The full path to this file, indented to help us quickly get to the
+        /// file without having to reconstruct the file path.
+        /// </summary>
         internal string FullPath { get; }
         internal DirectoryNode Parent { get; }
+
+        /// <summary>
+        /// If this file was found in the folder of originals, or some other
+        /// location. Helps in the case where we don't want to move/detect dupes
+        /// in the originals folder.
+        /// </summary>
         internal bool FromOriginalsTree { get; }
         private string _hashAsString;
         private byte[] _hash;
