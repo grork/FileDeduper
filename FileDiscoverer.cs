@@ -111,6 +111,7 @@ namespace Codevoid.Utility.FileDeduper
         internal event EventHandler<FileNode> FileDiscovered;
 
         internal FileDiscoverer(DirectoryInfo root,
+                                DirectoryNode rootNode,
                                 DirectoryInfo duplicatesDestinationRoot,
                             CancellationToken cancellationToken,
                                          bool sourcedFromOriginals = false)
@@ -118,7 +119,12 @@ namespace Codevoid.Utility.FileDeduper
             this._root = root;
             this._duplicatesDestinationRoot = duplicatesDestinationRoot;
             this._sourcedFromOriginals = sourcedFromOriginals;
-            this.RootNode = new DirectoryNode(String.Empty, null);
+            this.RootNode = rootNode;
+            
+            if(this.RootNode == null)
+            {
+                this.RootNode = new DirectoryNode(String.Empty, null);
+            }
         }
 
         internal void DiscoverFiles()

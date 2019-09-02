@@ -79,6 +79,59 @@ namespace Codevoid.Utility.FileDeduper
         }
     }
 
+    class StateLoader
+    {
+        private bool _sourcedFromOriginalsTree = false;
+        private DirectoryInfo _root;
+
+        internal event EventHandler<FileNode> FileDiscovered;
+
+        internal StateLoader(DirectoryInfo root, bool sourcedFromOriginalsTree = false)
+        {
+            this._sourcedFromOriginalsTree = sourcedFromOriginalsTree;
+            this._root = root;
+        }
+
+        internal void LoadStateFromNodes(DirectoryNode parent, XmlNodeList children)
+        {
+            foreach (XmlNode n in children)
+            {
+                XmlElement item = n as XmlElement;
+
+                switch (item.Name)
+                {
+                    case "Folder":
+                        var newFolder = new DirectoryNode(item.GetAttribute("Name"), parent);
+                        this.LoadStateFromNodes(newFolder, item.ChildNodes);
+                        parent.Directories[newFolder.Name] = newFolder;
+                        break;
+
+                    case "File":
+                        var fileName = item.GetAttribute("Name");
+
+                        var fullPath = Path.Combine(this._root.FullName, Program.GetPathForDirectory(parent), fileName);
+                        var newFile = new FileNode(fileName, fullPath, parent, this._sourcedFromOriginalsTree);
+
+                        if (item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
+                        {
+                            // Assume we have the hash, so convert the child text to the byte[]
+                            var hash = Program.GetHashBytesFromString(item.FirstChild.InnerText);
+                            newFile.Hash = hash;
+                        }
+
+                        parent.Files[fileName] = newFile;
+
+                        var handler = this.FileDiscovered;
+                        if(handler != null)
+                        {
+                            handler(this, newFile);
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
     class Program
     {
         /// <summary>
@@ -192,9 +245,12 @@ namespace Codevoid.Utility.FileDeduper
                 }
             }
 
-            if(findDupesInOriginals || (this._duplicateDestinationRoot == null))
+            // If we have duplicate candidate directory, then we should respect
+            // the value of dupes-in-originals, no matter what other value might
+            // have been set.
+            if(this._duplicateCandidatesRoot != null)
             {
-                this._findDupesInOriginals = true;
+                this._findDupesInOriginals = findDupesInOriginals;
             }
 
             return true;
@@ -208,11 +264,18 @@ namespace Codevoid.Utility.FileDeduper
                 return false;
             }
 
+            if(this._duplicateCandidatesRoot != null && !this._duplicateCandidatesRoot.Exists)
+            {
+                Console.WriteLine($"Duplicate Candidates directory '${this._duplicateCandidatesRoot.FullName}' wasn't found");
+                return false;
+            }
+
             if(this._duplicateDestinationRoot != null && !this._duplicateDestinationRoot.Exists)
             {
                 try
                 {
                     this._duplicateDestinationRoot.Create();
+                    Console.WriteLine("Duplicate Destination: {0}", this._duplicateDestinationRoot.FullName);
                 }
                 catch(IOException)
                 {
@@ -265,6 +328,7 @@ namespace Codevoid.Utility.FileDeduper
             if (!this._skipFileSystemCheck)
             {
                 var originalsDiscoverer = new FileDiscoverer(root: this._root,
+                                                         rootNode: this._originalsNode,
                                         duplicatesDestinationRoot: this._duplicateDestinationRoot,
                                              sourcedFromOriginals: true,
                                              cancellationToken: this._cancellationSource.Token);
@@ -277,6 +341,7 @@ namespace Codevoid.Utility.FileDeduper
                 if(this._duplicateCandidatesRoot != null)
                 {
                     var duplicatesDiscoverer = new FileDiscoverer(root: this._duplicateCandidatesRoot,
+                                                              rootNode: this._duplicateCandidatesNode,
                                              duplicatesDestinationRoot: this._duplicateDestinationRoot,
                                              cancellationToken: this._cancellationSource.Token);
                     duplicatesDiscoverer.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
@@ -355,6 +420,9 @@ namespace Codevoid.Utility.FileDeduper
                 {
                     this.SaveCurrentStateToDisk();
                 }
+
+                Console.WriteLine();
+                Console.WriteLine("Hashing {0} file(s) took {1}", filesHashed, DateTime.Now - start);
             }
             else
             {
@@ -365,9 +433,6 @@ namespace Codevoid.Utility.FileDeduper
             {
                 return;
             }
-
-            Console.WriteLine();
-            Console.WriteLine("Hashing {0} file(s) took {1}", filesHashed, DateTime.Now - start);
 
             var filesWithDuplicates = new Queue<Duplicates>();
             var duplicateFiles = 0;
@@ -439,19 +504,22 @@ namespace Codevoid.Utility.FileDeduper
                 var destinationSubPath = Program.GetPathForDirectory(file.Parent);
                 var treeSubPath = Path.Combine(destinationSubPath, file.Name);
 
-                var sourceFilePath = Path.Combine(this._root.FullName, treeSubPath);
-                if(!File.Exists(sourceFilePath))
+                if(!File.Exists(file.FullPath))
                 {
-                    Console.WriteLine("Skipping File, source no longer present: {0}", sourceFilePath);
+                    Console.WriteLine("Skipping File, source no longer present: {0}", file.FullPath);
                     continue;
                 }
 
                 var destinationFilePath = Path.Combine(this._duplicateDestinationRoot.FullName, treeSubPath);
-                this._duplicateDestinationRoot.CreateSubdirectory(destinationSubPath);
-                File.Move(sourceFilePath, destinationFilePath);
+                if(!String.IsNullOrEmpty(destinationFilePath))
+                {
+                    this._duplicateDestinationRoot.CreateSubdirectory(destinationSubPath);
+                }
+
+                File.Move(file.FullPath, destinationFilePath);
                 filesMoved++;
 
-                Program.UpdateConsole("Moved to duplicate directory: {0}", sourceFilePath);
+                Program.UpdateConsole("Moved to duplicate directory: {0}", file.FullPath);
             }
 
             return filesMoved;
@@ -577,49 +645,18 @@ namespace Codevoid.Utility.FileDeduper
 
             var originalsNodes = rootOfState.GetElementsByTagName("Originals");
             var originals = new DirectoryNode(String.Empty, null);
-            this.ProcessNodes(originals, originalsNodes[0].ChildNodes, sourcedFromOriginalsTree: true);
+            var originalsLoader = new StateLoader(this._root, true);
+            originalsLoader.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
+            originalsLoader.LoadStateFromNodes(originals, originalsNodes[0].ChildNodes);
 
             var duplicateNodes = rootOfState.GetElementsByTagName("DuplicateCandidates");
             var duplicateCandidates = new DirectoryNode(String.Empty, null);
-            this.ProcessNodes(duplicateCandidates, duplicateNodes[0].ChildNodes);
+            var duplicatesLoader = new StateLoader(this._duplicateCandidatesRoot);
+            duplicatesLoader.FileDiscovered += this.AddFileToDuplicateListOrQueueForHashing;
+            duplicatesLoader.LoadStateFromNodes(duplicateCandidates, duplicateNodes[0].ChildNodes);
 
             this._originalsNode = originals;
             this._duplicateCandidatesNode = duplicateCandidates;
-        }
-
-        private void ProcessNodes(DirectoryNode parent, XmlNodeList children, bool sourcedFromOriginalsTree = false)
-        {
-            foreach (XmlNode n in children)
-            {
-                XmlElement item = n as XmlElement;
-
-                switch (item.Name)
-                {
-                    case "Folder":
-                        var newFolder = new DirectoryNode(item.GetAttribute("Name"), parent);
-                        this.ProcessNodes(newFolder, item.ChildNodes, sourcedFromOriginalsTree);
-                        parent.Directories[newFolder.Name] = newFolder;
-                        break;
-
-                    case "File":
-                        var fileName = item.GetAttribute("Name");
-
-                        var fullPath = Path.Combine(this._root.FullName, Program.GetPathForDirectory(parent), fileName);
-                        var newFile = new FileNode(fileName, fullPath, parent, sourcedFromOriginalsTree);
-
-                        if (item.FirstChild != null && item.FirstChild.NodeType == XmlNodeType.Text)
-                        {
-                            // Assume we have the hash, so convert the child text to the byte[]
-                            var hash = Program.GetHashBytesFromString(item.FirstChild.InnerText);
-                            newFile.Hash = hash;
-                        }
-
-                        parent.Files[fileName] = newFile;
-
-                        this.AddFileToDuplicateListOrQueueForHashing(this, newFile);
-                        break;
-                }
-            }
         }
         #endregion State Loading
 
@@ -678,7 +715,7 @@ namespace Codevoid.Utility.FileDeduper
             Console.WriteLine();
         }
 
-        private static string GetPathForDirectory(DirectoryNode dn)
+        internal static string GetPathForDirectory(DirectoryNode dn)
         {
             var components = new List<string>();
 
@@ -691,7 +728,7 @@ namespace Codevoid.Utility.FileDeduper
             return String.Join(Path.DirectorySeparatorChar, components);
         }
 
-        private static byte[] GetHashBytesFromString(string innerText)
+        internal static byte[] GetHashBytesFromString(string innerText)
         {
             Debug.Assert(innerText.Length == 32, "Hash is not the correct length");
             var bytes = new List<byte>(16);
