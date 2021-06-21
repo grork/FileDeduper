@@ -96,10 +96,10 @@ namespace Codevoid.Utility.FileDeduper
 
     class FileDiscoverer
     {
-        private DirectoryInfo _root;
-        private DirectoryInfo _duplicatesDestinationRoot;
-        private bool _sourcedFromOriginals = false;
-        private CancellationToken _cancellationToken;
+        private readonly DirectoryInfo _root;
+        private readonly DirectoryInfo _duplicatesDestinationRoot;
+        private readonly bool _sourcedFromOriginals = false;
+        private readonly CancellationToken _cancellationToken;
         
         internal DirectoryNode RootNode { get; private set; }
         internal ulong DiscoveredFileCount { get; private set; }
@@ -120,6 +120,7 @@ namespace Codevoid.Utility.FileDeduper
             this._duplicatesDestinationRoot = duplicatesDestinationRoot;
             this._sourcedFromOriginals = sourcedFromOriginals;
             this.RootNode = rootNode;
+            this._cancellationToken = cancellationToken;
             
             if(this.RootNode == null)
             {
@@ -313,12 +314,8 @@ namespace Codevoid.Utility.FileDeduper
             // answer (since we found the folder path already)
             var newFile = new FileNode(fileName, path, current, this._sourcedFromOriginals);
             current.Files[fileName] = newFile;
-            
-            EventHandler<FileNode> handler = this.FileDiscovered;
-            if(handler != null)
-            {
-                handler(this, newFile);
-            }
+
+            this.FileDiscovered?.Invoke(this, newFile);
         }
     }
 }
